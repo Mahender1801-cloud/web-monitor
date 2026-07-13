@@ -1,0 +1,29 @@
+name: Site monitor
+
+# Runs 5x/day (UTC). These land at ~03:30, 06:30, 09:30, 12:30, 15:30 UTC
+# = ~09:00, 12:00, 15:00, 18:00, 21:00 IST. Adjust to taste.
+# "Run workflow" button in the Actions tab triggers it on demand.
+on:
+  schedule:
+    - cron: '30 3 * * *'
+    - cron: '30 6 * * *'
+    - cron: '30 9 * * *'
+    - cron: '30 12 * * *'
+    - cron: '30 15 * * *'
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run checks
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PSI_KEY:              ${{ secrets.PSI_KEY }}
+          RUN_TYPE:             scheduled
+        run: node scripts/check.mjs

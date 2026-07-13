@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hashtag Eyewear · Site Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root{
+  --bg:#F5F6F8; --surface:#FFFFFF; --ink:#101728; --muted:#616B7C; --faint:#9AA3B2;
+  --line:#E7E9EE; --line2:#EEF0F4; --accent:#4F46E5; --accent-soft:#EEF0FF;
+  --good:#129C6E; --good-bg:#E6F6EF; --warn:#E0961A; --warn-bg:#FBF2E0; --poor:#E23D4B; --poor-bg:#FCE9EB;
+  --shadow:0 1px 2px rgba(16,23,40,.04),0 8px 24px -12px rgba(16,23,40,.10);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font-family:Inter,system-ui,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased}
+.mono{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
+button{font-family:inherit;cursor:pointer}
+a{color:inherit}
+
+/* layout */
+.app{display:grid;grid-template-columns:240px 1fr;min-height:100vh}
+.side{background:var(--surface);border-right:1px solid var(--line);position:sticky;top:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
+.brand{padding:20px 20px 14px;display:flex;align-items:center;gap:11px}
+.lens{width:26px;height:26px;border-radius:50%;background:conic-gradient(from 210deg,var(--accent),#8B84F5,var(--accent));position:relative;box-shadow:inset 0 0 0 2px #fff, inset 0 0 0 3px var(--accent)}
+.lens::after{content:"";position:absolute;inset:6px;border-radius:50%;background:#fff;opacity:.9}
+.brand b{font-family:'Space Grotesk';font-weight:700;font-size:15px;letter-spacing:-.01em}
+.brand span{display:block;font-size:11px;color:var(--faint);font-weight:500;margin-top:1px}
+.navgrp{padding:8px 12px}
+.navgrp h4{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);margin:14px 8px 6px;font-weight:600}
+.nav{display:flex;align-items:center;gap:9px;width:100%;text-align:left;border:0;background:transparent;color:var(--muted);padding:8px 9px;border-radius:8px;font-size:13px;font-weight:500;margin-bottom:1px}
+.nav:hover{background:var(--line2);color:var(--ink)}
+.nav.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.nav .ic{width:16px;text-align:center;font-size:13px;opacity:.9}
+.nav .dot{margin-left:auto;width:7px;height:7px;border-radius:50%}
+.side-foot{margin-top:auto;padding:14px;border-top:1px solid var(--line);font-size:11px;color:var(--faint)}
+
+/* topbar */
+.main{min-width:0;display:flex;flex-direction:column}
+.top{position:sticky;top:0;z-index:5;background:rgba(245,246,248,.82);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:14px 26px;display:flex;align-items:center;gap:16px}
+.top h1{font-family:'Space Grotesk';font-size:18px;font-weight:600;margin:0;letter-spacing:-.01em}
+.top .sub{color:var(--muted);font-size:12px;margin-top:2px}
+.live{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.pulse{width:8px;height:8px;border-radius:50%;background:var(--good);box-shadow:0 0 0 0 rgba(18,156,110,.5);animation:pulse 2s infinite}
+.pulse.off{background:var(--faint);animation:none}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(18,156,110,.45)}70%{box-shadow:0 0 0 7px rgba(18,156,110,0)}100%{box-shadow:0 0 0 0 rgba(18,156,110,0)}}
+.btn{border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:500;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{border-color:#cdd2db}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.pri:hover{background:#4239d6}
+
+.wrap{padding:24px 26px 60px;max-width:1180px;width:100%}
+.view{display:none}.view.on{display:block;animation:fade .25s ease}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+/* cards + grid */
+.grid{display:grid;gap:16px}
+.g5{grid-template-columns:repeat(5,1fr)}.g4{grid-template-columns:repeat(4,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}.g2{grid-template-columns:1.5fr 1fr}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 17px;box-shadow:var(--shadow)}
+.card h3{margin:0 0 2px;font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.01em}
+.metric{font-family:'JetBrains Mono';font-size:27px;font-weight:600;letter-spacing:-.02em;margin-top:9px;line-height:1}
+.metric small{font-size:13px;color:var(--faint);font-weight:400;margin-left:3px}
+.metric-sub{font-size:11.5px;color:var(--faint);margin-top:7px;display:flex;align-items:center;gap:6px}
+.tag{font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:20px;text-transform:capitalize}
+.tag.good{color:var(--good);background:var(--good-bg)}.tag.warn{color:var(--warn);background:var(--warn-bg)}.tag.poor{color:var(--poor);background:var(--poor-bg)}.tag.na{color:var(--faint);background:var(--line2)}
+.section-h{display:flex;align-items:baseline;gap:10px;margin:26px 0 13px}
+.section-h h2{font-family:'Space Grotesk';font-size:15px;font-weight:600;margin:0}
+.section-h span{font-size:12px;color:var(--faint)}
+
+/* web vitals table (image layout) */
+.wv{background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:var(--shadow)}
+.wv table{width:100%;border-collapse:collapse}
+.wv th{font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);font-weight:600;text-align:left;padding:13px 12px;border-bottom:1px solid var(--line)}
+.wv th.m{text-align:center;width:118px}
+.wv td{padding:11px 12px;border-bottom:1px solid var(--line2);vertical-align:middle}
+.wv tr:last-child td{border-bottom:0}
+.wv tr.avg td{background:#FAFBFC;font-weight:600}
+.pg{font-weight:600;font-size:13px}
+.pg small{display:block;color:var(--faint);font-size:11px;font-weight:400;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.plat{font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:.05em}
+.cell{text-align:center}
+.cellval{font-family:'JetBrains Mono';font-weight:600;font-size:14px}
+.cellval.good{color:var(--good)}.cellval.warn{color:var(--warn)}.cellval.poor{color:var(--poor)}.cellval.na{color:var(--faint)}
+.spark{display:flex;gap:1.5px;justify-content:center;margin-top:6px;height:14px;align-items:flex-end}
+.spark i{width:4px;border-radius:1px;background:var(--line);display:block}
+.spark i.on{background:currentColor}
+
+/* live table */
+.tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.tbl th{text-align:left;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);font-weight:600;padding:10px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--surface)}
+.tbl td{padding:9px 10px;border-bottom:1px solid var(--line2)}
+.tbl tr:hover td{background:#FAFBFC}
+.tbl tr.fresh td{animation:flash 1.4s ease}
+@keyframes flash{from{background:var(--accent-soft)}to{background:transparent}}
+.chip{font-size:10.5px;padding:2px 7px;border-radius:6px;background:var(--line2);color:var(--muted);font-weight:500}
+.raw-btn{border:0;background:none;color:var(--accent);font-size:11px;font-weight:600;padding:0}
+.toolbar{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+.toolbar select,.toolbar input{border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-family:inherit;font-size:12.5px;background:var(--surface);color:var(--ink)}
+.scroll{max-height:560px;overflow:auto;border:1px solid var(--line);border-radius:14px;background:var(--surface);box-shadow:var(--shadow)}
+
+/* task cards */
+.taskrow{display:flex;align-items:center;gap:12px;padding:12px 15px;border-bottom:1px solid var(--line2)}
+.taskrow:last-child{border-bottom:0}
+.st{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.st.pass{background:var(--good)}.st.warn{background:var(--warn)}.st.fail{background:var(--poor)}.st.manual{background:var(--faint)}.st.error{background:#9333EA}.st.pending{background:var(--line);outline:1px dashed #cbd0d9}
+.taskrow .lbl{font-weight:500;font-size:13px}
+.taskrow .meta{margin-left:auto;display:flex;align-items:center;gap:12px;color:var(--faint);font-size:11.5px}
+.taskrow .val{font-family:'JetBrains Mono';font-size:11.5px;color:var(--muted)}
+.mini{border:1px solid var(--line);background:var(--surface);border-radius:7px;padding:4px 9px;font-size:11px;font-weight:600;color:var(--muted)}
+.mini:hover{border-color:var(--accent);color:var(--accent)}
+.autobadge{font-size:9.5px;font-weight:700;letter-spacing:.05em;padding:1px 6px;border-radius:5px;background:var(--accent-soft);color:var(--accent)}
+.autobadge.man{background:var(--line2);color:var(--faint)}
+
+/* config banner + modal */
+.banner{background:linear-gradient(90deg,#FFF9EC,#FFFDF7);border:1px solid #F1E3BF;color:#8A6D1F;border-radius:12px;padding:11px 15px;font-size:12.5px;margin-bottom:18px;display:flex;gap:10px;align-items:center}
+.banner b{color:#6b540f}
+.modal-bg{position:fixed;inset:0;background:rgba(16,23,40,.45);display:none;align-items:center;justify-content:center;z-index:40;padding:20px}
+.modal-bg.on{display:flex}
+.modal{background:#fff;border-radius:14px;max-width:560px;width:100%;padding:22px;box-shadow:0 24px 60px -20px rgba(16,23,40,.4);max-height:82vh;overflow:auto}
+.modal h3{margin:0 0 12px;font-family:'Space Grotesk'}
+.modal pre{background:#0E1728;color:#E6E8EF;padding:14px;border-radius:10px;font-size:11.5px;overflow:auto;font-family:'JetBrains Mono';line-height:1.55}
+.empty{padding:40px;text-align:center;color:var(--faint);font-size:13px}
+@media(max-width:820px){.app{grid-template-columns:1fr}.side{position:fixed;left:-260px;transition:.2s;z-index:30}.side.open{left:0}.g5,.g4,.g3,.g2{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- SIDEBAR -->
+  <aside class="side" id="side">
+    <div class="brand"><div class="lens"></div><div><b>Site Monitor</b><span>Hashtag Eyewear</span></div></div>
+    <div class="navgrp" id="nav"></div>
+    <div class="side-foot" id="foot">Sample mode · not connected</div>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="main">
+    <div class="top">
+      <div>
+        <h1 id="vtitle">Summary</h1>
+        <div class="sub" id="vsub">Real-user performance across the store</div>
+      </div>
+      <div class="live">
+        <button class="btn" onclick="openConfig()">⚙ Connect</button>
+        <button class="btn" id="refreshBtn" onclick="loadAll(true)">↻ Refresh</button>
+        <span class="pulse off" id="pulse"></span>
+        <span id="livelbl">idle</span>
+      </div>
+    </div>
+
+    <div class="wrap">
+      <div id="banner" class="banner">
+        <span>●</span><div><b>Sample data.</b> You're seeing generated numbers. Click <b>Connect</b>, paste your Supabase URL + anon key, and everything below goes live.</div>
+      </div>
+
+      <!-- SUMMARY -->
+      <section class="view on" data-view="summary">
+        <div class="grid g5" id="sumTiles"></div>
+        <div class="section-h"><h2>Real-user trend</h2><span id="sumRange">last 200 page views</span></div>
+        <div class="grid g2">
+          <div class="card"><h3>LCP p75 over time</h3><canvas id="trendChart" height="118"></canvas></div>
+          <div class="card"><h3>Device split</h3><canvas id="deviceChart" height="118"></canvas></div>
+        </div>
+        <div class="section-h"><h2>Slowest paths</h2><span>by LCP p75</span></div>
+        <div class="wv"><table><thead><tr><th>Path</th><th class="m">Views</th><th class="m">LCP p75</th><th class="m">INP p75</th><th class="m">CLS p75</th></tr></thead><tbody id="slowPaths"></tbody></table></div>
+      </section>
+
+      <!-- WEB VITALS -->
+      <section class="view" data-view="webvitals">
+        <!-- LIVE: real users, from the beacon -->
+        <div class="toolbar">
+          <span style="display:inline-flex;align-items:center;gap:7px;font-weight:600"><span class="pulse" style="animation-duration:2.4s"></span>Live · real users</span>
+          <span style="color:var(--faint);font-size:12px">p75 from your own visitors (web-vitals beacon) · updates in real time</span>
+          <select id="wvDevice" onchange="renderWVLive()" style="margin-left:auto;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-family:inherit;font-size:12px"><option value="">all devices</option><option>mobile</option><option>desktop</option></select>
+        </div>
+        <div class="wv">
+          <table>
+            <thead><tr>
+              <th>Page</th>
+              <th class="m">LCP</th><th class="m">INP</th><th class="m">CLS</th><th class="m">FCP</th><th class="m">TTFB</th><th class="m">Views</th>
+            </tr></thead>
+            <tbody id="wvLiveBody"></tbody>
+          </table>
+        </div>
+
+        <!-- CROSS-CHECK: PageSpeed (28-day field + synthetic lab, NOT live) -->
+        <div class="section-h" style="margin-top:32px">
+          <h2>PageSpeed cross-check</h2>
+          <span>28-day field average + synthetic lab — not live, for validation only</span>
+        </div>
+        <div class="toolbar">
+          <span style="color:var(--muted);font-size:12.5px">Google's field (CrUX) is a <b>28-day rolling average</b>; lab is a one-off Lighthouse run. Use this to sanity-check the live numbers above — it will always lag them.</span>
+          <button class="btn pri" style="margin-left:auto" id="runPsiBtn" onclick="runPSIAll()">▶ Run PageSpeed now</button>
+        </div>
+        <div class="wv">
+          <table>
+            <thead><tr>
+              <th>Page</th>
+              <th class="m">LCP · field</th><th class="m">INP · field</th><th class="m">CLS · field</th>
+              <th class="m">LCP · lab</th><th class="m">TBT · lab</th><th class="m">CLS · lab</th>
+            </tr></thead>
+            <tbody id="wvBody"></tbody>
+          </table>
+        </div>
+        <p style="color:var(--faint);font-size:11.5px;margin-top:12px">Field (CrUX) covers 28 days of real Chrome users and can be empty on low-traffic pages; lab is a single synthetic run. Neither is live — your live tracker is the real-user table at the top.</p>
+      </section>
+
+      <!-- LIVE DATA -->
+      <section class="view" data-view="live">
+        <div class="toolbar">
+          <input id="fPath" placeholder="filter path…" oninput="renderLive()">
+          <select id="fDevice" onchange="renderLive()"><option value="">all devices</option><option>mobile</option><option>desktop</option></select>
+          <select id="fRating" onchange="renderLive()"><option value="">any LCP rating</option><option value="good">good</option><option value="needs-improvement">needs-improvement</option><option value="poor">poor</option></select>
+          <span id="liveCount" style="margin-left:auto;color:var(--faint);font-size:12px"></span>
+        </div>
+        <div class="scroll">
+          <table class="tbl"><thead><tr>
+            <th>Time</th><th>Path</th><th>Device</th><th>Browser</th><th>Conn</th>
+            <th>LCP</th><th>INP</th><th>CLS</th><th>FCP</th><th>TTFB</th><th></th>
+          </tr></thead><tbody id="liveBody"></tbody></table>
+        </div>
+      </section>
+
+      <!-- MONITORS -->
+      <section class="view" data-view="monitors">
+        <div class="toolbar">
+          <input id="mLabel" placeholder="label (e.g. Product page)" style="flex:1;min-width:150px">
+          <input id="mUrl" placeholder="https://…" style="flex:2;min-width:220px">
+          <button class="btn pri" onclick="addMonitor()">+ Add URL</button>
+        </div>
+        <div class="wv"><table><thead><tr><th>Label</th><th>URL</th><th class="m">Active</th><th class="m"></th></tr></thead><tbody id="monBody"></tbody></table></div>
+      </section>
+
+      <!-- TASK CATEGORY (single reused view) -->
+      <section class="view" data-view="task">
+        <div class="toolbar">
+          <span id="taskDesc" style="color:var(--muted);font-size:12.5px"></span>
+          <button class="btn pri" style="margin-left:auto" onclick="runCategoryChecks()">▶ Run auto checks</button>
+        </div>
+        <div class="card" style="padding:0" id="taskList"></div>
+        <p style="color:var(--faint);font-size:11.5px;margin-top:12px">
+          <span class="autobadge">AUTO</span> checks run server-side 5×/day via GitHub Actions and on demand.
+          <span class="autobadge man">MANUAL</span> checks are visual — toggle them Pass / Attention after you eyeball the page. Server-only probes (SSL, robots, meta) can't run from the browser, so <b>Run auto checks</b> refreshes PageSpeed live and flags the rest to the next scheduled run.
+        </p>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- config modal -->
+<div class="modal-bg" id="cfgModal">
+  <div class="modal">
+    <h3>Connect Supabase</h3>
+    <p style="color:var(--muted);font-size:13px;margin-top:0">Paste from Supabase → Project Settings → API. Stored only in this browser.</p>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <input id="cfgUrl" class="toolbar" placeholder="https://xxxx.supabase.co" style="padding:9px 11px;border:1px solid var(--line);border-radius:8px">
+      <input id="cfgKey" class="toolbar" placeholder="anon public key (eyJ…)" style="padding:9px 11px;border:1px solid var(--line);border-radius:8px">
+      <input id="cfgPsi" class="toolbar" placeholder="PageSpeed API key (optional)" style="padding:9px 11px;border:1px solid var(--line);border-radius:8px">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+      <button class="btn" onclick="closeConfig()">Cancel</button>
+      <button class="btn pri" onclick="saveConfig()">Connect</button>
+    </div>
+  </div>
+</div>
+<!-- raw modal -->
+<div class="modal-bg" id="rawModal"><div class="modal"><h3>Raw event</h3><pre id="rawPre"></pre><div style="text-align:right;margin-top:14px"><button class="btn" onclick="document.getElementById('rawModal').classList.remove('on')">Close</button></div></div></div>
+
+<script>
+/* ============================ CONFIG ============================ */
+// Hardcode here for production, or leave blank and use the Connect button.
+let CONFIG = { url:'', key:'', psi:'' };
+try { const s = JSON.parse(localStorage.getItem('hm_cfg')||'null'); if(s) CONFIG=s; } catch(e){}
+let sb = null, LIVE = false;
+function initSB(){ if(CONFIG.url && CONFIG.key && window.supabase){ sb = window.supabase.createClient(CONFIG.url, CONFIG.key); LIVE=true; } else { LIVE=false; } }
+
+/* ===================== rating thresholds ======================= */
+const TH = {
+  lcp:[2500,4000], fcp:[1800,3000], ttfb:[800,1800], inp:[200,500], cls:[0.1,0.25], tbt:[200,600]
+};
+function rate(metric,v){ if(v==null||isNaN(v))return 'na'; const [g,p]=TH[metric]; return v<=g?'good':v<=p?'warn':'poor'; }
+function fmtMs(v){ if(v==null||isNaN(v))return '—'; return v>=1000?(v/1000).toFixed(v>=10000?0:2)+'s':Math.round(v)+'ms'; }
+function fmtCls(v){ return v==null||isNaN(v)?'—':(+v).toFixed(2); }
+function p75(arr){ const a=arr.filter(x=>x!=null&&!isNaN(x)).sort((x,y)=>x-y); if(!a.length)return null; return a[Math.min(a.length-1,Math.floor(a.length*0.75))]; }
+
+/* ===================== SAMPLE DATA (fallback) ================== */
+const PATHS=['/','/collections/sports-sunglasses','/collections/bestsellers','/products/falcon-grey-large-half-rim-shield-sports-sunglasses','/products/pulse-transparent-green-large-half-rim-shield','/cart','/apps/wishlist'];
+const BROW=['Chrome','Chrome','Chrome','Safari','Chrome'];
+function rnd(a,b){return a+Math.random()*(b-a)}
+function makeSampleRUM(n){
+  const rows=[]; const now=Date.now();
+  for(let i=0;i<n;i++){
+    const mob=Math.random()<0.82; const path=PATHS[Math.floor(Math.random()*PATHS.length)];
+    const slow=Math.random()<0.18;
+    rows.push({
+      id:n-i, created_at:new Date(now-i*45000).toISOString(),
+      session_id:crypto.randomUUID?crypto.randomUUID():('s'+i), path, url:'https://hashtageyewears.com'+path,
+      device:mob?'mobile':'desktop', os:mob?'Android':'Windows', browser:BROW[Math.floor(Math.random()*BROW.length)],
+      viewport:mob?'411x702':'1707x811', connection:'4g',
+      lcp:Math.round(slow?rnd(4200,6800):rnd(700,2600)), cls:+(Math.random()<0.9?rnd(0,0.08):rnd(0.2,0.6)).toFixed(2),
+      inp:Math.round(Math.random()<0.7?rnd(20,180):rnd(220,520)), fcp:Math.round(rnd(400,2200)), ttfb:Math.round(rnd(120,900)),
+    });
+    const r=rows[rows.length-1];
+    r.lcp_rating=lbl(rate('lcp',r.lcp)); r.cls_rating=lbl(rate('cls',r.cls)); r.inp_rating=lbl(rate('inp',r.inp));
+    r.raw={metrics:{LCP:{value:r.lcp,rating:r.lcp_rating}}, sample:true};
+  }
+  return rows;
+}
+function lbl(r){return r==='good'?'good':r==='warn'?'needs-improvement':r==='poor'?'poor':null}
+function makeSamplePSI(){
+  const mons=SAMPLE_MON; const out=[];
+  mons.forEach(m=>['mobile','desktop'].forEach(s=>{
+    const slow=/product|cart/.test(m.url)&&s==='mobile';
+    out.push({url:m.url,label:m.label,strategy:s,created_at:new Date().toISOString(),
+      lcp_crux:Math.round(s==='mobile'?rnd(1800,3400):rnd(700,1400)), inp_crux:Math.round(rnd(40,190)), cls_crux:+rnd(0.01,0.14).toFixed(2),
+      lcp_lab:Math.round(slow?rnd(3800,6200):rnd(900,2600)), tbt_lab:Math.round(rnd(60,2600)), cls_lab:+rnd(0.01,0.36).toFixed(2),
+      perf_score:Math.round(slow?rnd(38,62):rnd(72,96))});
+  }));
+  return out;
+}
+const SAMPLE_MON=[
+  {id:'1',label:'Homepage',url:'https://hashtageyewears.com/',active:true},
+  {id:'2',label:'Bestsellers',url:'https://hashtageyewears.com/collections/bestsellers',active:true},
+  {id:'3',label:'Sports Sunglasses',url:'https://hashtageyewears.com/collections/sports-sunglasses',active:true},
+  {id:'4',label:'Product (sample)',url:'https://hashtageyewears.com/products/falcon-grey-large-half-rim-shield',active:true},
+  {id:'5',label:'Cart',url:'https://hashtageyewears.com/cart',active:true},
+];
+const TASK_CATS=['Homepage Testing','Search Page Testing','Collection Page Testing','Product Page Testing','Cart & Checkout Testing','Performance & Speed Testing','App & Integration Testing','SEO & Metadata Testing','Security & Compliance Testing','Cross-Browser & Accessibility Testing'];
+const SAMPLE_ITEMS=[
+  ['Homepage Testing','Check homepage loading speed','auto','load_speed'],['Homepage Testing','Verify banners / sliders load','manual',null],['Homepage Testing','Test mega menu and navigation','manual',null],['Homepage Testing','Mobile + desktop responsiveness','manual',null],['Homepage Testing','Check 404 and broken links','auto','broken_links'],
+  ['Search Page Testing','Search + autocomplete','manual',null],['Search Page Testing','No-results page behavior','manual',null],['Search Page Testing','Search filters / sorting','manual',null],
+  ['Collection Page Testing','Collection loading speed','auto','load_speed'],['Collection Page Testing','Filters / sorting','manual',null],['Collection Page Testing','Product cards alignment','manual',null],['Collection Page Testing','Banners / images load','auto','http_status'],
+  ['Product Page Testing','Product page loading speed','auto','load_speed'],['Product Page Testing','Add to Cart & Buy Now','manual',null],['Product Page Testing','Variant selection','manual',null],['Product Page Testing','Reviews loading','manual',null],
+  ['Cart & Checkout Testing','Add product to cart','manual',null],['Cart & Checkout Testing','Drawer cart working','manual',null],['Cart & Checkout Testing','Shiprocket redirect','manual',null],['Cart & Checkout Testing','Pincode serviceability','manual',null],
+  ['Performance & Speed Testing','Core Web Vitals (PageSpeed)','auto','cwv'],['Performance & Speed Testing','Heavy scripts check','auto','load_speed'],['Performance & Speed Testing','Lazy loading','manual',null],['Performance & Speed Testing','Third-party script bloat','manual',null],
+  ['App & Integration Testing','Wishlist app','manual',null],['App & Integration Testing','Review integrations','manual',null],
+  ['SEO & Metadata Testing','Meta titles / descriptions','auto','meta'],['SEO & Metadata Testing','sitemap.xml & robots.txt','auto','robots_sitemap'],['SEO & Metadata Testing','Schema markup','auto','schema'],['SEO & Metadata Testing','Canonical tags','auto','canonical'],['SEO & Metadata Testing','Image alt text','manual',null],
+  ['Security & Compliance Testing','SSL certificate validity','auto','ssl'],['Security & Compliance Testing','Cookie consent banner','manual',null],['Security & Compliance Testing','Privacy / Terms / Returns load','auto','policy_pages'],
+  ['Cross-Browser & Accessibility Testing','Chrome / Safari / Firefox / Edge','manual',null],['Cross-Browser & Accessibility Testing','Keyboard nav / screen reader','manual',null],['Cross-Browser & Accessibility Testing','404 & broken link check','auto','broken_links'],
+].map((r,i)=>({id:'i'+i,category:r[0],item:r[1],check_type:r[2],auto_key:r[3],sort:i}));
+
+/* ===================== STATE ================== */
+let DATA={ rum:[], psi:[], monitors:[], items:[], checks:[] };
+let curView='summary', curCat=null, charts={};
+
+/* ===================== NAV ================== */
+const CAT_ICON={'Homepage Testing':'🌐','Search Page Testing':'🔍','Collection Page Testing':'🛍','Product Page Testing':'📦','Cart & Checkout Testing':'🛒','Performance & Speed Testing':'⚡','App & Integration Testing':'🧩','SEO & Metadata Testing':'🔎','Security & Compliance Testing':'🔒','Cross-Browser & Accessibility Testing':'🌐'};
+function buildNav(){
+  const el=document.getElementById('nav');
+  let h=`<h4>Monitoring</h4>
+    ${navBtn('summary','Summary','📊')}
+    ${navBtn('webvitals','Web Vitals','◐')}
+    ${navBtn('live','Live Data','⚡')}
+    ${navBtn('monitors','Monitors','🔗')}
+    <h4>QA Tasks</h4>`;
+  TASK_CATS.forEach(c=> h+=navBtn('cat:'+c, c.replace(' Testing',''), CAT_ICON[c]||'•', true));
+  el.innerHTML=h;
+}
+function navBtn(id,label,ic,isCat){
+  return `<button class="nav" data-nav="${id}" onclick="go('${id}')"><span class="ic">${ic}</span>${label}<span class="dot" data-dot="${id}"></span></button>`;
+}
+function go(id){
+  document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('on', n.dataset.nav===id));
+  if(id.startsWith('cat:')){ curView='task'; curCat=id.slice(4); showView('task'); renderTask(); setTitle(curCat.replace(' Testing',''), 'Runs 5×/day · toggle manual checks as you verify'); }
+  else { curView=id; showView(id); setTitle(TITLES[id][0], TITLES[id][1]); renderView(id); }
+  document.getElementById('side').classList.remove('open');
+}
+const TITLES={summary:['Summary','Real-user performance across the store'],webvitals:['Web Vitals','Live from your visitors · PageSpeed as cross-check'],live:['Live Data','Raw events streaming from real visitors'],monitors:['Monitors','URLs watched by the scheduler']};
+function setTitle(t,s){document.getElementById('vtitle').textContent=t;document.getElementById('vsub').textContent=s;}
+function showView(v){document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on', s.dataset.view===v));}
+function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='monitors')renderMonitors(); }
+
+/* ===================== DATA LOAD ================== */
+async function loadAll(manual){
+  document.getElementById('refreshBtn').textContent='↻ …';
+  if(LIVE && sb){
+    try{
+      const [rum,psi,mon,items,checks]=await Promise.all([
+        sb.from('rum_events').select('*').order('created_at',{ascending:false}).limit(400),
+        sb.from('psi_results').select('*').order('created_at',{ascending:false}).limit(200),
+        sb.from('monitors').select('*').order('created_at'),
+        sb.from('task_items').select('*').order('sort'),
+        sb.from('task_checks').select('*').order('created_at',{ascending:false}).limit(600),
+      ]);
+      DATA.rum=rum.data||[]; DATA.psi=psi.data||[]; DATA.monitors=mon.data||[]; DATA.items=items.data||[]; DATA.checks=checks.data||[];
+      document.getElementById('banner').style.display='none';
+      document.getElementById('foot').textContent='Connected · '+new URL(CONFIG.url).hostname;
+      setPulse(true,'live');
+    }catch(e){ console.error(e); alert('Load failed: '+e.message); }
+  } else {
+    DATA.rum=makeSampleRUM(200); DATA.psi=makeSamplePSI(); DATA.monitors=SAMPLE_MON; DATA.items=SAMPLE_ITEMS; DATA.checks=makeSampleChecks();
+    setPulse(false,'sample');
+  }
+  updateDots(); renderView(curView==='task'?null:curView); if(curView==='task')renderTask();
+  document.getElementById('refreshBtn').textContent='↻ Refresh';
+}
+function makeSampleChecks(){
+  return SAMPLE_ITEMS.filter(i=>i.check_type==='auto').map(i=>{
+    const st=['pass','pass','pass','warn','fail'][Math.floor(Math.random()*5)];
+    return {category:i.category,item:i.item,status:st,value:st==='pass'?'OK':st==='warn'?'check':'failing',created_at:new Date(Date.now()-rnd(0,6e6)).toISOString(),run_type:'scheduled'};
+  });
+}
+function setPulse(on,label){const p=document.getElementById('pulse');p.classList.toggle('off',!on);document.getElementById('livelbl').textContent=label;}
+
+/* status roll-up dot per category in the sidebar */
+function updateDots(){
+  TASK_CATS.forEach(c=>{
+    const checks=latestChecks().filter(x=>x.category===c);
+    let color='transparent';
+    if(checks.some(x=>x.status==='fail'||x.status==='error'))color='var(--poor)';
+    else if(checks.some(x=>x.status==='warn'))color='var(--warn)';
+    else if(checks.length)color='var(--good)';
+    const d=document.querySelector(`[data-dot="cat:${c}"]`); if(d)d.style.background=color;
+  });
+}
+function latestChecks(){
+  const seen={}, out=[];
+  for(const c of DATA.checks){ const k=c.category+'|'+c.item; if(!seen[k]){seen[k]=1;out.push(c);} }
+  return out;
+}
+
+/* ===================== SUMMARY ================== */
+function renderSummary(){
+  const r=DATA.rum;
+  const tiles=[
+    ['LCP','lcp',p75(r.map(x=>x.lcp)),fmtMs],
+    ['INP','inp',p75(r.map(x=>x.inp)),fmtMs],
+    ['CLS','cls',p75(r.map(x=>x.cls)),fmtCls],
+    ['FCP','fcp',p75(r.map(x=>x.fcp)),fmtMs],
+    ['TTFB','ttfb',p75(r.map(x=>x.ttfb)),fmtMs],
+  ];
+  document.getElementById('sumTiles').innerHTML=tiles.map(([name,key,v,f])=>{
+    const rt=rate(key,v);
+    return `<div class="card"><h3>${name} <span style="color:var(--faint);font-weight:400">p75</span></h3>
+      <div class="metric ${rt}" style="color:var(--${rt==='good'?'good':rt==='warn'?'warn':rt==='poor'?'poor':'ink'})">${f(v)}</div>
+      <div class="metric-sub"><span class="tag ${rt==='na'?'na':rt}">${rt==='na'?'no data':rt.replace('warn','needs work').replace('good','good').replace('poor','poor')}</span></div></div>`;
+  }).join('');
+  document.getElementById('sumRange').textContent=`last ${r.length} page views`;
+  // slow paths
+  const byPath={}; r.forEach(x=>{(byPath[x.path]=byPath[x.path]||[]).push(x)});
+  const rows=Object.entries(byPath).map(([p,list])=>({p,n:list.length,lcp:p75(list.map(x=>x.lcp)),inp:p75(list.map(x=>x.inp)),cls:p75(list.map(x=>x.cls))}))
+    .sort((a,b)=>(b.lcp||0)-(a.lcp||0)).slice(0,7);
+  document.getElementById('slowPaths').innerHTML=rows.map(x=>`<tr>
+    <td class="pg">${x.p}</td><td class="cell mono">${x.n}</td>
+    ${cellHTML('lcp',x.lcp,fmtMs)}${cellHTML('inp',x.inp,fmtMs)}${cellHTML('cls',x.cls,fmtCls)}</tr>`).join('')||'<tr><td colspan=5 class="empty">No data yet</td></tr>';
+  drawTrend(); drawDevice();
+}
+function cellHTML(metric,v,f){const rt=rate(metric,v);return `<td class="cell"><span class="cellval ${rt}">${f(v)}</span></td>`;}
+function drawTrend(){
+  const r=[...DATA.rum].reverse(); const buckets=[]; const size=Math.max(1,Math.floor(r.length/24));
+  for(let i=0;i<r.length;i+=size){ const chunk=r.slice(i,i+size); buckets.push(p75(chunk.map(x=>x.lcp))); }
+  const ctx=document.getElementById('trendChart'); if(charts.trend)charts.trend.destroy();
+  charts.trend=new Chart(ctx,{type:'line',data:{labels:buckets.map((_,i)=>i),datasets:[{data:buckets.map(v=>v?+(v/1000).toFixed(2):null),borderColor:'#4F46E5',backgroundColor:'rgba(79,70,229,.08)',fill:true,tension:.35,pointRadius:0,borderWidth:2}]},options:baseOpts('s')});
+}
+function drawDevice(){
+  const m=DATA.rum.filter(x=>x.device==='mobile').length,d=DATA.rum.length-m;
+  const ctx=document.getElementById('deviceChart'); if(charts.dev)charts.dev.destroy();
+  charts.dev=new Chart(ctx,{type:'doughnut',data:{labels:['Mobile','Desktop'],datasets:[{data:[m,d],backgroundColor:['#4F46E5','#C7C9F5'],borderWidth:0}]},options:{cutout:'66%',plugins:{legend:{position:'bottom',labels:{boxWidth:8,font:{size:11}}}}}});
+}
+function baseOpts(unit){return{plugins:{legend:{display:false}},scales:{x:{display:false},y:{grid:{color:'#F0F1F4'},ticks:{font:{size:10},callback:v=>v+(unit||'')}}},maintainAspectRatio:false};}
+
+/* ===================== WEB VITALS TABLE ================== */
+/* LIVE, real users — the actual live tracker, built from the beacon (RUM). */
+function renderWVLive(){
+  const fd=(document.getElementById('wvDevice')||{}).value||'';
+  const rows=DATA.rum.filter(r=>!fd||r.device===fd);
+  const groups={};
+  rows.forEach(r=>{const k=(r.path||'/')+'||'+(r.device||'');(groups[k]=groups[k]||[]).push(r)});
+  const list=Object.entries(groups).map(([k,arr])=>{
+    const [path,device]=k.split('||');
+    return {path,device,n:arr.length,
+      lcp:p75(arr.map(x=>x.lcp)),inp:p75(arr.map(x=>x.inp)),cls:p75(arr.map(x=>x.cls)),
+      fcp:p75(arr.map(x=>x.fcp)),ttfb:p75(arr.map(x=>x.ttfb))};
+  }).sort((a,b)=>b.n-a.n).slice(0,24);
+  const body=document.getElementById('wvLiveBody');
+  if(!list.length){body.innerHTML='<tr><td colspan=7 class="empty">No real-user data yet — pages appear here as the beacon reports them.</td></tr>';return;}
+  body.innerHTML=list.map(x=>{
+    const short=x.path==='/'?'Homepage':x.path.replace(/^\//,'').replace(/-/g,' ');
+    return `<tr>
+      <td><div class="pg">${short.length>40?short.slice(0,40)+'…':short}<small>${x.path} · <span class="plat">${x.device}</span></small></div></td>
+      ${wvCell('lcp',x.lcp,fmtMs)}${wvCell('inp',x.inp,fmtMs)}${wvCell('cls',x.cls,fmtCls)}${wvCell('fcp',x.fcp,fmtMs)}${wvCell('ttfb',x.ttfb,fmtMs)}
+      <td class="cell mono" style="color:var(--muted)">${x.n}</td></tr>`;
+  }).join('');
+}
+function latestPSI(){
+  const seen={},out=[];
+  for(const p of DATA.psi){const k=p.url+'|'+p.strategy;if(!seen[k]){seen[k]=1;out.push(p);}}
+  return out;
+}
+function spark(metric,v){
+  const rt=rate(metric,v); if(rt==='na')return '';
+  const [g,p]=TH[metric]; const max=p*1.6; const fill=Math.min(10,Math.round((v/max)*10));
+  const col=rt==='good'?'var(--good)':rt==='warn'?'var(--warn)':'var(--poor)';
+  let bars='';for(let i=0;i<10;i++)bars+=`<i class="${i<fill?'on':''}" style="height:${6+i}px"></i>`;
+  return `<div class="spark" style="color:${col}">${bars}</div>`;
+}
+function wvCell(metric,v,f){const rt=rate(metric,v);return `<td class="cell"><span class="cellval ${rt}">${f(v)}</span>${spark(metric,v)}</td>`;}
+function renderWV(){
+  const rows=latestPSI().sort((a,b)=>(a.label||'').localeCompare(b.label||'')||a.strategy.localeCompare(b.strategy));
+  const body=document.getElementById('wvBody');
+  if(!rows.length){body.innerHTML='<tr><td colspan=7 class="empty">No PageSpeed data yet — click “Run PageSpeed now”.</td></tr>';return;}
+  const agg={lcp_crux:[],inp_crux:[],cls_crux:[],lcp_lab:[],tbt_lab:[],cls_lab:[]};
+  body.innerHTML=rows.map(r=>{
+    ['lcp_crux','inp_crux','cls_crux','lcp_lab','tbt_lab','cls_lab'].forEach(k=>{if(r[k]!=null)agg[k].push(+r[k])});
+    const short=r.url.replace(/^https?:\/\/[^/]+/,'')||'/';
+    return `<tr>
+      <td><div class="pg">${r.label||short}<small>${short} · <span class="plat">${r.strategy}</span></small></div></td>
+      ${wvCell('lcp',r.lcp_crux,fmtMs)}${wvCell('inp',r.inp_crux,fmtMs)}${wvCell('cls',r.cls_crux,fmtCls)}
+      ${wvCell('lcp',r.lcp_lab,fmtMs)}${wvCell('tbt',r.tbt_lab,fmtMs)}${wvCell('cls',r.cls_lab,fmtCls)}
+    </tr>`;
+  }).join('');
+  body.innerHTML+=`<tr class="avg"><td>Average</td>
+    ${wvCell('lcp',p75(agg.lcp_crux),fmtMs)}${wvCell('inp',p75(agg.inp_crux),fmtMs)}${wvCell('cls',p75(agg.cls_crux),fmtCls)}
+    ${wvCell('lcp',p75(agg.lcp_lab),fmtMs)}${wvCell('tbt',p75(agg.tbt_lab),fmtMs)}${wvCell('cls',p75(agg.cls_lab),fmtCls)}</tr>`;
+}
+
+/* ===================== LIVE DATA ================== */
+function renderLive(){
+  const fp=(document.getElementById('fPath').value||'').toLowerCase();
+  const fd=document.getElementById('fDevice').value, fr=document.getElementById('fRating').value;
+  let rows=DATA.rum.filter(r=>(!fp||(r.path||'').toLowerCase().includes(fp))&&(!fd||r.device===fd)&&(!fr||r.lcp_rating===fr)).slice(0,150);
+  document.getElementById('liveCount').textContent=rows.length+' events';
+  document.getElementById('liveBody').innerHTML=rows.map((r,i)=>`<tr class="${i===0&&r._fresh?'fresh':''}">
+    <td class="mono" style="color:var(--faint)">${new Date(r.created_at).toLocaleTimeString()}</td>
+    <td>${(r.path||'—').slice(0,34)}</td><td><span class="chip">${r.device||'—'}</span></td>
+    <td>${r.browser||'—'}</td><td class="mono">${r.connection||'—'}</td>
+    ${liveCell('lcp',r.lcp,fmtMs)}${liveCell('inp',r.inp,fmtMs)}${liveCell('cls',r.cls,fmtCls)}${liveCell('fcp',r.fcp,fmtMs)}${liveCell('ttfb',r.ttfb,fmtMs)}
+    <td><button class="raw-btn" onclick='showRaw(${JSON.stringify(r).replace(/'/g,"&#39;")})'>raw</button></td>
+  </tr>`).join('')||'<tr><td colspan=11 class="empty">No matching events</td></tr>';
+}
+function liveCell(m,v,f){const rt=rate(m,v);return `<td class="mono cellval ${rt}" style="font-size:12px">${f(v)}</td>`;}
+function showRaw(r){document.getElementById('rawPre').textContent=JSON.stringify(r,null,2);document.getElementById('rawModal').classList.add('on');}
+
+/* ===================== MONITORS ================== */
+function renderMonitors(){
+  document.getElementById('monBody').innerHTML=DATA.monitors.map(m=>`<tr>
+    <td class="pg">${m.label}</td><td style="color:var(--muted);font-size:12px">${m.url}</td>
+    <td class="cell">${m.active?'<span class="tag good">on</span>':'<span class="tag na">off</span>'}</td>
+    <td class="cell"><button class="mini" onclick="delMonitor('${m.id}')">remove</button></td></tr>`).join('')
+    ||'<tr><td colspan=4 class="empty">No monitors yet</td></tr>';
+}
+async function addMonitor(){
+  const label=document.getElementById('mLabel').value.trim(), url=document.getElementById('mUrl').value.trim();
+  if(!label||!url)return alert('Label and URL required');
+  if(LIVE&&sb){ const {error}=await sb.from('monitors').insert({label,url}); if(error)return alert(error.message); }
+  else DATA.monitors.push({id:'x'+Date.now(),label,url,active:true});
+  document.getElementById('mLabel').value='';document.getElementById('mUrl').value='';
+  if(LIVE)await loadAll();else renderMonitors();
+}
+async function delMonitor(id){
+  if(LIVE&&sb){await sb.from('monitors').delete().eq('id',id);await loadAll();}
+  else{DATA.monitors=DATA.monitors.filter(m=>m.id!==id);renderMonitors();}
+}
+
+/* ===================== TASKS ================== */
+function renderTask(){
+  const items=DATA.items.filter(i=>i.category===curCat).sort((a,b)=>a.sort-b.sort);
+  const checks=latestChecks();
+  document.getElementById('taskDesc').textContent=`${items.length} checks · ${items.filter(i=>i.check_type==='auto').length} automated`;
+  document.getElementById('taskList').innerHTML=items.map(it=>{
+    const c=checks.find(x=>x.category===it.category&&x.item===it.item);
+    const st=c?c.status:(it.check_type==='manual'?'pending':'pending');
+    const auto=it.check_type==='auto';
+    const when=c?timeAgo(c.created_at):'not run';
+    return `<div class="taskrow">
+      <span class="st ${st}"></span>
+      <span class="lbl">${it.item}</span>
+      <span class="autobadge ${auto?'':'man'}">${auto?'AUTO':'MANUAL'}</span>
+      <span class="meta">
+        ${c&&c.value?`<span class="val">${c.value}</span>`:''}
+        <span>${when}</span>
+        ${auto?'':`<button class="mini" onclick="markManual('${it.category}','${it.item.replace(/'/g,"&#39;")}','pass')">✓ Pass</button><button class="mini" onclick="markManual('${it.category}','${it.item.replace(/'/g,"&#39;")}','fail')">⚠ Attention</button>`}
+      </span></div>`;
+  }).join('')||'<div class="empty">No checks in this category</div>';
+}
+function timeAgo(t){const s=(Date.now()-new Date(t))/1000;if(s<60)return'just now';if(s<3600)return Math.floor(s/60)+'m ago';if(s<86400)return Math.floor(s/3600)+'h ago';return Math.floor(s/86400)+'d ago';}
+async function markManual(cat,item,status){
+  const row={category:cat,item,status:status==='pass'?'pass':'fail',value:status==='pass'?'verified':'needs attention',run_type:'manual'};
+  if(LIVE&&sb){await sb.from('task_checks').insert(row);await loadAll();}
+  else{DATA.checks.unshift({...row,created_at:new Date().toISOString()});updateDots();renderTask();}
+}
+
+/* ===================== RUN CHECKS (browser-side PSI) ================== */
+async function runPSIAll(){ await runPSI(DATA.monitors, document.getElementById('runPsiBtn')); }
+async function runCategoryChecks(){
+  // browser can run PageSpeed (CORS-friendly). Target the category's relevant page.
+  const map={'Product':'product','Collection':'collection','Cart':'cart','Homepage':'/'};
+  let mons=DATA.monitors;
+  const key=Object.keys(map).find(k=>curCat.includes(k));
+  if(key){const m=DATA.monitors.find(x=>(x.label+x.url).toLowerCase().includes(map[key].replace('/','')))||DATA.monitors[0];mons=[m];}
+  await runPSI(mons, event.target, true);
+}
+async function runPSI(mons, btn, alsoTask){
+  if(!mons.length)return;
+  const orig=btn.textContent; btn.textContent='▶ running…'; btn.disabled=true;
+  const rows=[];
+  for(const m of mons){
+    for(const strat of ['mobile','desktop']){
+      try{
+        const u=new URL('https://www.googleapis.com/pagespeedonline/v5/runPagespeed');
+        u.searchParams.set('url',m.url);u.searchParams.set('strategy',strat);u.searchParams.append('category','performance');
+        if(CONFIG.psi)u.searchParams.set('key',CONFIG.psi);
+        const j=await (await fetch(u)).json();
+        const lab=j.lighthouseResult?.audits||{}, crux=j.loadingExperience?.metrics||{};
+        const row={url:m.url,label:m.label,strategy:strat,created_at:new Date().toISOString(),
+          lcp_crux:crux.LARGEST_CONTENTFUL_PAINT_MS?.percentile??null, inp_crux:crux.INTERACTION_TO_NEXT_PAINT?.percentile??null,
+          cls_crux:crux.CUMULATIVE_LAYOUT_SHIFT_SCORE?crux.CUMULATIVE_LAYOUT_SHIFT_SCORE.percentile/100:null,
+          lcp_lab:lab['largest-contentful-paint']?.numericValue??null, tbt_lab:lab['total-blocking-time']?.numericValue??null,
+          cls_lab:lab['cumulative-layout-shift']?.numericValue??null,
+          perf_score:j.lighthouseResult?.categories?.performance?.score!=null?Math.round(j.lighthouseResult.categories.performance.score*100):null, run_type:'manual'};
+        rows.push(row);
+        if(LIVE&&sb)await sb.from('psi_results').insert(row);
+        DATA.psi.unshift(row);
+      }catch(e){console.error('PSI',m.url,strat,e);}
+    }
+  }
+  btn.textContent=orig; btn.disabled=false;
+  renderWV(); if(alsoTask){updateDots();renderTask();}
+}
+
+/* ===================== REALTIME ================== */
+function subscribe(){
+  if(!LIVE||!sb)return;
+  sb.channel('rum').on('postgres_changes',{event:'INSERT',schema:'public',table:'rum_events'},payload=>{
+    const r=payload.new; r._fresh=true; DATA.rum.unshift(r); if(DATA.rum.length>400)DATA.rum.pop();
+    if(curView==='live')renderLive(); if(curView==='summary')renderSummary(); if(curView==='webvitals')renderWVLive();
+    const p=document.getElementById('pulse');p.classList.remove('off');
+  }).subscribe();
+}
+
+/* ===================== CONFIG MODAL ================== */
+function openConfig(){document.getElementById('cfgUrl').value=CONFIG.url;document.getElementById('cfgKey').value=CONFIG.key;document.getElementById('cfgPsi').value=CONFIG.psi;document.getElementById('cfgModal').classList.add('on');}
+function closeConfig(){document.getElementById('cfgModal').classList.remove('on');}
+function saveConfig(){
+  CONFIG={url:document.getElementById('cfgUrl').value.trim(),key:document.getElementById('cfgKey').value.trim(),psi:document.getElementById('cfgPsi').value.trim()};
+  try{localStorage.setItem('hm_cfg',JSON.stringify(CONFIG));}catch(e){}
+  closeConfig();initSB();subscribe();loadAll();
+}
+
+/* ===================== BOOT ================== */
+buildNav();initSB();loadAll().then(subscribe);
+</script>
+</body>
+</html>
