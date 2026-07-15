@@ -178,6 +178,67 @@ async function probeBrokenLinks(url) {
   } catch (e) { return { status: 'error', value: 'fetch failed', detail: e.message }; }
 }
 
+async function probeViewportMeta(url) {
+  try {
+    const { text } = await timedGet(url);
+    const has = /<meta[^>]+name=["']viewport["']/i.test(text);
+    return { status: has ? 'pass' : 'fail', value: has ? 'viewport meta present' : 'missing viewport meta', detail: url };
+  } catch (e) { return { status: 'error', value: 'fetch failed', detail: e.message }; }
+}
+async function probeImgAlt(url) {
+  try {
+    const { text } = await timedGet(url);
+    const imgs = [...text.matchAll(/<img\b[^>]*>/gi)].map(m => m[0]);
+    if (!imgs.length) return { status: 'warn', value: 'no <img> found', detail: url };
+    const withAlt = imgs.filter(t => /\balt\s*=\s*["'][^"']+["']/i.test(t)).length;
+    const pct = Math.round(withAlt / imgs.length * 100);
+    return { status: pct >= 90 ? 'pass' : pct >= 60 ? 'warn' : 'fail', value: `${withAlt}/${imgs.length} imgs have alt (${pct}%)`, detail: url };
+  } catch (e) { return { status: 'error', value: 'fetch failed', detail: e.message }; }
+}
+async function probeLazyLoad(url) {
+  try {
+    const { text } = await timedGet(url);
+    const lazy = (text.match(/loading\s*=\s*["']lazy["']/gi) || []).length;
+    const imgs = (text.match(/<img\b/gi) || []).length;
+    return { status: lazy > 0 ? 'pass' : 'warn', value: `${lazy} lazy of ${imgs} imgs`, detail: url };
+  } catch (e) { return { status: 'error', value: 'fetch failed', detail: e.message }; }
+}
+async function probeScriptBloat(url) {
+  try {
+    const { text } = await timedGet(url);
+    const ext = [...text.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)].map(m => m[1]);
+    const base = origin(url);
+    const third = ext.filter(s => { try { const o = new URL(s, base).origin; return o !== base && !/shopify|shopifycdn|myshopify/.test(o); } catch { return false; } }).length;
+    return { status: third <= 12 ? 'pass' : third <= 20 ? 'warn' : 'fail', value: `${ext.length} scripts · ${third} third-party`, detail: url };
+  } catch (e) { return { status: 'error', value: 'fetch failed', detail: e.message }; }
+}
+async function probeSearchPage(url, q) {
+  const base = origin(url);
+  try {
+    const { status } = await timedGet(`${base}/search?q=${encodeURIComponent(q)}`);
+    return { status: status >= 400 ? 'fail' : 'pass', value: `search ${status}`, detail: `q=${q}` };
+  } catch (e) { return { status: 'error', value: 'fetch failed', detail: e.message }; }
+}
+async function probeImagesLoad(url) {
+  try {
+    const { text } = await timedGet(url);
+    const base = origin(url);
+    const srcs = [...text.matchAll(/<img\b[^>]*\bsrc=["']([^"']+)["']/gi)].map(m => m[1]);
+    const sample = [...new Set(srcs)].slice(0, 8).map(s => { try { return new URL(s, base).href; } catch { return null; } }).filter(Boolean);
+    if (!sample.length) return { status: 'warn', value: 'no images found', detail: url };
+    let bad = 0;
+    for (const s of sample) { try { const { status } = await timedGet(s, { method: 'HEAD' }); if (status >= 400) bad++; } catch { bad++; } }
+    return { status: bad === 0 ? 'pass' : bad <= 1 ? 'warn' : 'fail', value: `${sample.length - bad}/${sample.length} images load`, detail: url };
+  } catch (e) { return { status: 'error', value: 'fetch failed', detail: e.message }; }
+}
+async function probeMarkup(url, patterns, okMsg, missMsg) {
+  try {
+    const { text } = await timedGet(url);
+    const found = patterns.some(p => new RegExp(p, 'i').test(text));
+    return { status: found ? 'pass' : 'warn', value: found ? okMsg : missMsg, detail: url };
+  } catch (e) { return { status: 'error', value: 'fetch failed', detail: e.message }; }
+}
+
 // ---- map auto_key -> probe (site-wide probes run once against homepage) -----
 async function runAuto(key, monitor, homepage) {
   const u = monitor.url;
@@ -191,6 +252,16 @@ async function runAuto(key, monitor, homepage) {
     case 'schema':          return probeSchema(u);
     case 'policy_pages':    return probePolicyPages(homepage);
     case 'broken_links':    return probeBrokenLinks(homepage);
+    case 'viewport_meta':   return probeViewportMeta(u);
+    case 'img_alt':         return probeImgAlt(u);
+    case 'lazyload':        return probeLazyLoad(u);
+    case 'script_bloat':    return probeScriptBloat(u);
+    case 'images_load':     return probeImagesLoad(u);
+    case 'search_page':     return probeSearchPage(homepage, 'sunglasses');
+    case 'search_noresults':return probeSearchPage(homepage, 'zzxqveryunlikely123');
+    case 'wishlist_app':    return probeMarkup(homepage, ['wishlist', 'swym', 'wishlisthero', 'wishlist-hero'], 'wishlist markup found', 'no wishlist markup');
+    case 'review_app':      return probeMarkup(u, ['judge\\.me', 'yotpo', 'loox', 'stamped', 'okendo', 'reviewsio', 'jdgm'], 'review app found', 'no review markup');
+    case 'cookie_consent':  return probeMarkup(homepage, ['cookieyes', 'cookiebot', 'consent', 'gdpr', 'cookie-banner', 'cookie-consent'], 'consent banner found', 'no consent markup');
     case 'cwv':             return null; // handled by PSI directly
     default:                return null;
   }
