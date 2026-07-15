@@ -68,16 +68,27 @@ async function psi(url, strategy) {
 }
 
 // ---- lightweight fetch with timing + status --------------------------------
+// Realistic browser headers + polite throttling + one retry on 429/503, so
+// Shopify/Cloudflare don't rate-limit us into false failures.
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function timedGet(url, opts = {}) {
-  const t0 = Date.now();
-  const res = await fetch(url, {
+  const doFetch = () => fetch(url, {
     redirect: 'follow',
-    headers: { 'User-Agent': 'HashtagMonitor/1.0' },
+    headers: {
+      'User-Agent': UA,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9'
+    },
     signal: AbortSignal.timeout(20000),
     ...opts
   });
+  const t0 = Date.now();
+  let res = await doFetch();
+  if ((res.status === 429 || res.status === 503)) { await sleep(2500); res = await doFetch(); } // one polite retry
   const ms = Date.now() - t0;
   const text = opts.method === 'HEAD' ? '' : await res.text().catch(() => '');
+  await sleep(350); // space out requests so we don't trip rate limits
   return { status: res.status, ms, text, finalUrl: res.url };
 }
 
