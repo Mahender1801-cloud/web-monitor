@@ -31,6 +31,12 @@
   const round = n => (typeof n === 'number' ? Math.round(n) : null);
   const sessionId = (crypto.randomUUID && crypto.randomUUID()) || (Date.now() + '-' + Math.random());
 
+  // marketing attribution + device context (extra columns; run rum_extra_columns.sql first)
+  const qp = new URLSearchParams(location.search);
+  const utm = k => qp.get('utm_' + k) || null;
+  const screenSize = (screen && screen.width) ? (screen.width + 'x' + screen.height) : null;
+  const lang = navigator.language || null;
+
   const browser = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera'
     : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox'
     : /Safari\//.test(ua) ? 'Safari' : 'Other';
@@ -78,7 +84,9 @@
       ttfb: m.TTFB?.value ?? null, ttfb_rating: m.TTFB?.rating ?? null,
       ttfb_waiting: m.TTFB?.waiting ?? null, ttfb_dns: m.TTFB?.dns ?? null,
       ttfb_connect: m.TTFB?.connect ?? null, ttfb_request: m.TTFB?.request ?? null,
-      raw: { metrics: m, ua }
+      utm_source: utm('source'), utm_medium: utm('medium'), utm_campaign: utm('campaign'),
+      screen: screenSize, lang,
+      raw: { metrics: m, ua, utm_term: utm('term'), utm_content: utm('content'), title: document.title, pixelRatio: devicePixelRatio || null }
     };
   }
 

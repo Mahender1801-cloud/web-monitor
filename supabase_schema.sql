@@ -31,6 +31,8 @@ create table if not exists public.rum_events (
   fcp           numeric, fcp_rating text,
   ttfb          numeric, ttfb_rating text,
   ttfb_waiting  numeric, ttfb_dns numeric, ttfb_connect numeric, ttfb_request numeric,
+  utm_source    text, utm_medium text, utm_campaign text,
+  screen        text, lang text,
   raw           jsonb
 );
 create index if not exists rum_events_created_idx on public.rum_events (created_at desc);
