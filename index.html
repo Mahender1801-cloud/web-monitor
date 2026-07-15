@@ -109,6 +109,13 @@ a{color:inherit}
 .spark{display:flex;gap:1.5px;justify-content:center;margin-top:6px;height:14px;align-items:flex-end}
 .spark i{width:4px;border-radius:1px;background:var(--line);display:block}
 .spark i.on{background:currentColor}
+/* monitors — per-page daily sparklines (10 bars = 10 days) */
+.spark10{display:flex;gap:2px;justify-content:center;align-items:flex-end;height:22px;margin-bottom:5px}
+.spark10 i{width:5px;border-radius:1px;display:block;min-height:3px}
+.monrow{display:flex;align-items:center;gap:11px}
+.montile{border:1px solid var(--line);border-radius:7px;background:var(--line2) center/cover no-repeat;flex-shrink:0;box-shadow:inset 0 0 0 1px #fff}
+.montile.mobile{width:34px;height:46px}
+.montile.desktop{width:58px;height:42px}
 
 /* live table */
 .tbl{width:100%;border-collapse:collapse;font-size:12.5px}
@@ -279,7 +286,14 @@ a{color:inherit}
           <input id="mUrl" placeholder="https://…" style="flex:2;min-width:220px">
           <button class="btn pri" onclick="addMonitor()">+ Add URL</button>
         </div>
-        <div class="wv"><table><thead><tr><th>Label</th><th>URL</th><th class="m">Active</th><th class="m"></th></tr></thead><tbody id="monBody"></tbody></table></div>
+        <div class="wv"><table>
+          <thead><tr>
+            <th>Page</th>
+            <th class="m">LCP</th><th class="m">INP</th><th class="m">CLS</th><th class="m">FCP</th><th class="m">TTFB</th><th class="m">Views</th>
+          </tr></thead>
+          <tbody id="monBody"></tbody>
+        </table></div>
+        <p style="color:var(--faint);font-size:11.5px;margin-top:12px">Each page appears twice — <b>Mobile</b> and <b>Desktop</b>. Every metric is a 10-bar sparkline where <b>each bar = one day</b> (last 10 days), colored by that day's rating; the number below is the p75 across the window. Vitals are your real visitors (RUM), so they populate for pages on your store.</p>
       </section>
 
       <!-- TASK CATEGORY (single reused view) -->
@@ -429,7 +443,7 @@ function toggleSide(force){
   document.getElementById('side').classList.toggle('open', open);
   document.getElementById('backdrop').classList.toggle('on', open);
 }
-const TITLES={summary:['Summary','Real-user performance across the store'],webvitals:['Web Vitals','Live from your visitors · PageSpeed as cross-check'],live:['Live Data','Raw events streaming from real visitors'],monitors:['Monitors','URLs watched by the scheduler']};
+const TITLES={summary:['Summary','Real-user performance across the store'],webvitals:['Web Vitals','Live from your visitors · PageSpeed as cross-check'],live:['Live Data','Raw events streaming from real visitors'],monitors:['Monitors','Per-page Web Vitals by device · 10-day daily sparklines']};
 function setTitle(t,s){document.getElementById('vtitle').textContent=t;document.getElementById('vsub').textContent=s;}
 function showView(v){document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on', s.dataset.view===v));}
 function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='monitors')renderMonitors(); }
@@ -703,12 +717,55 @@ function liveCell(m,v,f){const rt=rate(m,v);return `<td class="mono cellval ${rt
 function showRaw(r){document.getElementById('rawPre').textContent=JSON.stringify(r,null,2);document.getElementById('rawModal').classList.add('on');}
 
 /* ===================== MONITORS ================== */
+function monPath(u){ try{ return new URL(u).pathname.replace(/\/+$/,'')||'/'; }catch{ return u; } }
+function monPathMatch(rp, mp){ rp=rp||'/'; if(mp==='/') return rp==='/'||rp===''; const b=mp.replace(/\/+$/,''); return rp===b || rp.startsWith(b+'/'); }
+function dayStart(ts){ const d=new Date(ts); d.setHours(0,0,0,0); return +d; }
+function dailySeries(rows, metric, days){
+  const today=dayStart(Date.now()); const out=[];
+  for(let i=days-1;i>=0;i--){
+    const from=today-i*DAY, to=from+DAY;
+    const day=rows.filter(r=>{const t=+new Date(r.created_at); return t>=from && t<to;});
+    out.push(metric==='views'? day.length : p75(day.map(x=>x[metric])));
+  }
+  return out; // oldest -> newest, length = days
+}
+function monCell(metric, series){
+  let max, overall;
+  if(metric==='views'){ max=Math.max(1,...series.map(v=>v||0)); overall=series.reduce((a,b)=>a+(b||0),0); }
+  else { const [g,p]=TH[metric]; max=p*1.5; overall=p75(series.filter(v=>v!=null)); }
+  const bars=series.map(v=>{
+    if(v==null || (metric==='views'&&!v)) return '<i style="height:3px;background:var(--line)"></i>';
+    let h, col;
+    if(metric==='views'){ h=Math.max(3,Math.round(v/max*18)); col='var(--accent)'; }
+    else { h=Math.max(3,Math.round(Math.min(1,v/max)*18)); const rt=rate(metric,v); col=rt==='good'?'var(--good)':rt==='warn'?'var(--warn)':'var(--poor)'; }
+    return `<i style="height:${h}px;background:${col}"></i>`;
+  }).join('');
+  const f=metric==='views'?(v=>v.toLocaleString()):(metric==='cls'?fmtCls:fmtMs);
+  const rt=metric==='views'?'':rate(metric,overall);
+  const vc=metric==='views'?'var(--ink)':(rt==='good'?'var(--good)':rt==='warn'?'var(--warn)':rt==='poor'?'var(--poor)':'var(--faint)');
+  return `<td class="cell"><div class="spark10">${bars}</div><div class="cellval" style="color:${vc}">${overall==null?'—':f(overall)}</div></td>`;
+}
 function renderMonitors(){
-  document.getElementById('monBody').innerHTML=DATA.monitors.map(m=>`<tr>
-    <td class="pg">${m.label}</td><td style="color:var(--muted);font-size:12px">${m.url}</td>
-    <td class="cell">${m.active?'<span class="tag good">on</span>':'<span class="tag na">off</span>'}</td>
-    <td class="cell"><button class="mini" onclick="delMonitor('${m.id}')">remove</button></td></tr>`).join('')
-    ||'<tr><td colspan=4 class="empty">No monitors yet</td></tr>';
+  const mons=DATA.monitors, body=document.getElementById('monBody');
+  if(!mons.length){ body.innerHTML='<tr><td colspan=7 class="empty">No monitors yet — add a page URL above.</td></tr>'; return; }
+  const METRICS=['lcp','inp','cls','fcp','ttfb'];
+  body.innerHTML=mons.map(m=>{
+    const mp=monPath(m.url);
+    const pageRows=DATA.rum.filter(r=>monPathMatch(r.path, mp));
+    return ['mobile','desktop'].map(dev=>{
+      const dr=pageRows.filter(r=>r.device===dev);
+      const cells=METRICS.map(k=>monCell(k, dailySeries(dr,k,10))).join('') + monCell('views', dailySeries(dr,'views',10));
+      const shot=`https://s.wordpress.com/mshots/v1/${encodeURIComponent(m.url)}?w=240`;
+      const remove=dev==='mobile'?` · <button class="raw-btn" onclick="delMonitor('${m.id}')">remove</button>`:'';
+      return `<tr>
+        <td><div class="monrow">
+          <div class="montile ${dev}" style="background-image:url('${shot}')"></div>
+          <div class="pg">${m.label} <span class="plat">${dev}</span><small>${m.url}${remove}</small></div>
+        </div></td>
+        ${cells}
+      </tr>`;
+    }).join('');
+  }).join('');
 }
 async function addMonitor(){
   const label=document.getElementById('mLabel').value.trim(), url=document.getElementById('mUrl').value.trim();
