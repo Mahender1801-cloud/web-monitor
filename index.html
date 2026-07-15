@@ -755,7 +755,9 @@ function renderMonitors(){
     return ['mobile','desktop'].map(dev=>{
       const dr=pageRows.filter(r=>r.device===dev);
       const cells=METRICS.map(k=>monCell(k, dailySeries(dr,k,10))).join('') + monCell('views', dailySeries(dr,'views',10));
-      const shot=`https://s.wordpress.com/mshots/v1/${encodeURIComponent(m.url)}?w=240`;
+      const shot=dev==='mobile'
+        ? `https://image.thum.io/get/viewportWidth/400/width/160/${m.url}`
+        : `https://image.thum.io/get/viewportWidth/1280/width/240/${m.url}`;
       const remove=dev==='mobile'?` · <button class="raw-btn" onclick="delMonitor('${m.id}')">remove</button>`:'';
       return `<tr>
         <td><div class="monrow">
