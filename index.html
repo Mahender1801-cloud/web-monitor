@@ -274,7 +274,7 @@ a{color:inherit}
 <script>
 /* ============================ CONFIG ============================ */
 // Hardcode here for production, or leave blank and use the Connect button.
-let CONFIG = { url:'', key:'', psi:'' };
+let CONFIG = { url:'https://ijzudvwhzsnwysucyves.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlqenVkdndoenNud3lzdWN5dmVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5MzA1MDYsImV4cCI6MjA5OTUwNjUwNn0.i59l07obJhiKt-RND4FEsETKpVUsvQiVGYxDYt5K0Cw', psi:'' };
 try { const s = JSON.parse(localStorage.getItem('hm_cfg')||'null'); if(s) CONFIG=s; } catch(e){}
 let sb = null, LIVE = false;
 function initSB(){ if(CONFIG.url && CONFIG.key && window.supabase){ sb = window.supabase.createClient(CONFIG.url, CONFIG.key); LIVE=true; } else { LIVE=false; } }
