@@ -111,17 +111,26 @@ async function pullGA() {
     const dateRanges = [{ startDate: '28daysAgo', endDate: 'today' }];
     const byDev  = await gaRun(token, { dateRanges, dimensions: [{ name: 'date' }, { name: 'deviceCategory' }], metrics, limit: 2000 });
     const byPage = await gaRun(token, { dateRanges, dimensions: [{ name: 'date' }, { name: 'pagePath' }], metrics, limit: 5000 });
+    // Landing page = the page that STARTED the session. GA4 credits purchases to
+    // the thank-you page under pagePath, so this is the only per-page attribution
+    // that can be correlated with that page's speed.
+    const byLand = await gaRun(token, { dateRanges, dimensions: [{ name: 'date' }, { name: 'landingPagePlusQueryString' }], metrics, limit: 5000 });
     const iso = d => `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`;
-    const mk = (date, device, page, m) => ({
-      date: iso(date), device, page_path: page,
+    const clean = v => (!v || v === '(not set)' || v === '(none)') ? '(not set)' : v;
+    const mk = (scope, date, device, page, m) => ({
+      scope, date: iso(date), device, page_path: page,
       sessions: m[0], users: m[1], purchases: m[2], revenue: m[3], add_to_carts: m[4], checkouts: m[5],
       updated_at: new Date().toISOString()
     });
-    const rows = [...byDev.map(r => mk(r.d[0], r.d[1], '', r.m)),
-                  ...byPage.map(r => mk(r.d[0], '', r.d[1], r.m))];
-    if (rows.length) { await sbUpsert('ga_daily', rows, 'date,device,page_path'); }
+    const rows = [
+      ...byDev.map(r  => mk('device',  r.d[0], clean(r.d[1]), '', r.m)),
+      ...byPage.map(r => mk('page',    r.d[0], '', clean(r.d[1]).split('?')[0], r.m)),
+      ...byLand.map(r => mk('landing', r.d[0], '', clean(r.d[1]).split('?')[0], r.m)),
+    ];
+    if (rows.length) { await sbUpsert('ga_daily', rows, 'date,scope,device,page_path'); }
     const orders = byDev.reduce((a, r) => a + r.m[2], 0), rev = byDev.reduce((a, r) => a + r.m[3], 0);
-    console.log(`GA: ${rows.length} rows · ${orders} purchases · revenue ${rev.toFixed(0)} (last 28d)`);
+    const landOrders = byLand.reduce((a, r) => a + r.m[2], 0);
+    console.log(`GA: ${rows.length} rows · ${orders} purchases · revenue ${rev.toFixed(0)} · ${landOrders} purchases attributed to landing pages (last 28d)`);
   } catch (e) { console.error('GA pull failed:', e.message); }
 }
 

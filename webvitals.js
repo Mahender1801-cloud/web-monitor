@@ -15,6 +15,14 @@ const utm = k => qp.get('utm_' + k) || null;
 const screenSize = (screen && screen.width) ? (screen.width + 'x' + screen.height) : null;
 const lang = navigator.language || null;
 
+// Google Analytics link (needs the ga_* columns from ga_fix.sql).
+// _ga            = GA1.1.<clientId>       -> GA4's per-browser user id
+// _ga_NG5J2LV3F5 = GS1.1.<sessionId>.<n>  -> GA4's session id for this visit
+// Storing these lets us match a slow page view here to the same user in GA4.
+const cookie = n => { const m = document.cookie.match('(^|;)\\s*' + n + '\\s*=\\s*([^;]+)'); return m ? m.pop() : ''; };
+const gaClientId = (cookie('_ga').split('.').slice(-2).join('.')) || null;
+const gaSessionId = (cookie('_ga_NG5J2LV3F5').split('.')[2]) || null;
+
 const browser = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera'
   : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox'
   : /Safari\//.test(ua) ? 'Safari' : 'Other';
@@ -64,6 +72,7 @@ function payload() {
     ttfb_connect: m.TTFB?.connect ?? null, ttfb_request: m.TTFB?.request ?? null,
     utm_source: utm('source'), utm_medium: utm('medium'), utm_campaign: utm('campaign'),
     screen: screenSize, lang,
+    ga_client_id: gaClientId, ga_session_id: gaSessionId,
     raw: { metrics: m, ua, utm_term: utm('term'), utm_content: utm('content'), title: document.title, pixelRatio: devicePixelRatio || null }
   };
 }
