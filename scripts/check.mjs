@@ -10,10 +10,15 @@
 //   SUPABASE_URL, SUPABASE_SERVICE_KEY, PSI_KEY (optional but recommended)
 // ============================================================================
 
+import crypto from 'node:crypto';
+
 const SUPABASE_URL  = process.env.SUPABASE_URL;
 const SERVICE_KEY   = process.env.SUPABASE_SERVICE_KEY;
 const PSI_KEY       = process.env.PSI_KEY || '';
 const RUN_TYPE      = process.env.RUN_TYPE || 'scheduled';
+// Google Analytics (optional — skipped cleanly if not configured)
+const GA_PROPERTY_ID = process.env.GA_PROPERTY_ID || '';
+const GA_SA_KEY      = process.env.GA_SA_KEY || '';
 
 if (!SUPABASE_URL || !SERVICE_KEY) {
   console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_KEY'); process.exit(1);
@@ -35,6 +40,12 @@ async function sbInsert(table, rows) {
     method: 'POST', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(rows)
   });
   if (!r.ok) console.error(`insert ${table}: ${r.status} ${await r.text()}`);
+}
+async function sbUpsert(table, rows, onConflict) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?on_conflict=${onConflict}`, {
+    method: 'POST', headers: { ...H, Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify(rows)
+  });
+  if (!r.ok) console.error(`upsert ${table}: ${r.status} ${await r.text()}`);
 }
 async function sbPatch(table, idCol, idVal, patch) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${idCol}=eq.${encodeURIComponent(idVal)}`, {
@@ -58,6 +69,60 @@ async function captureShot(url, viewportWidth, width) {
     } catch { await sleep(2000); }
   }
   return null;
+}
+
+// ---- Google Analytics (GA4 Data API) ---------------------------------------
+// Service-account JWT -> access token -> runReport. No external deps: Node's
+// crypto signs the RS256 assertion directly.
+function b64url(s) { return Buffer.from(s).toString('base64url'); }
+async function gaToken(sa) {
+  const now = Math.floor(Date.now() / 1000);
+  const head  = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claim = b64url(JSON.stringify({
+    iss: sa.client_email, scope: 'https://www.googleapis.com/auth/analytics.readonly',
+    aud: 'https://oauth2.googleapis.com/token', exp: now + 3600, iat: now
+  }));
+  const unsigned = `${head}.${claim}`;
+  const sig = crypto.createSign('RSA-SHA256').update(unsigned).sign(sa.private_key).toString('base64url');
+  const r = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${unsigned}.${sig}` })
+  });
+  const j = await r.json();
+  if (!j.access_token) throw new Error('GA auth failed: ' + JSON.stringify(j).slice(0, 200));
+  return j.access_token;
+}
+async function gaRun(token, body) {
+  const r = await fetch(`https://analyticsdata.googleapis.com/v1beta/properties/${GA_PROPERTY_ID}:runReport`, {
+    method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body), signal: AbortSignal.timeout(60000)
+  });
+  const j = await r.json();
+  if (j.error) throw new Error('GA report: ' + j.error.message);
+  return (j.rows || []).map(row => ({ d: row.dimensionValues.map(x => x.value), m: row.metricValues.map(x => +x.value || 0) }));
+}
+async function pullGA() {
+  if (!GA_PROPERTY_ID || !GA_SA_KEY) { console.log('GA not configured (GA_PROPERTY_ID / GA_SA_KEY) — skipping.'); return; }
+  let sa; try { sa = JSON.parse(GA_SA_KEY); } catch { console.error('GA_SA_KEY is not valid JSON'); return; }
+  try {
+    const token = await gaToken(sa);
+    const metrics = [{ name: 'sessions' }, { name: 'activeUsers' }, { name: 'ecommercePurchases' },
+                     { name: 'purchaseRevenue' }, { name: 'addToCarts' }, { name: 'checkouts' }];
+    const dateRanges = [{ startDate: '28daysAgo', endDate: 'today' }];
+    const byDev  = await gaRun(token, { dateRanges, dimensions: [{ name: 'date' }, { name: 'deviceCategory' }], metrics, limit: 2000 });
+    const byPage = await gaRun(token, { dateRanges, dimensions: [{ name: 'date' }, { name: 'pagePath' }], metrics, limit: 5000 });
+    const iso = d => `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`;
+    const mk = (date, device, page, m) => ({
+      date: iso(date), device, page_path: page,
+      sessions: m[0], users: m[1], purchases: m[2], revenue: m[3], add_to_carts: m[4], checkouts: m[5],
+      updated_at: new Date().toISOString()
+    });
+    const rows = [...byDev.map(r => mk(r.d[0], r.d[1], '', r.m)),
+                  ...byPage.map(r => mk(r.d[0], '', r.d[1], r.m))];
+    if (rows.length) { await sbUpsert('ga_daily', rows, 'date,device,page_path'); }
+    const orders = byDev.reduce((a, r) => a + r.m[2], 0), rev = byDev.reduce((a, r) => a + r.m[3], 0);
+    console.log(`GA: ${rows.length} rows · ${orders} purchases · revenue ${rev.toFixed(0)} (last 28d)`);
+  } catch (e) { console.error('GA pull failed:', e.message); }
 }
 
 // ---- PageSpeed Insights ----------------------------------------------------
@@ -307,6 +372,9 @@ async function runAuto(key, monitor, homepage) {
   if (!monitors.length) { console.log('No active monitors.'); return; }
   const homepage = (monitors.find(m => /\/$/.test(m.url)) || monitors[0]).url;
   const items = await sbSelect('task_items', 'check_type=eq.auto&select=*');
+
+  // 0) Google Analytics: sessions / users / purchases / revenue -> ga_daily
+  await pullGA();
 
   // 1) PageSpeed for every monitor, mobile + desktop
   const psiRows = [];

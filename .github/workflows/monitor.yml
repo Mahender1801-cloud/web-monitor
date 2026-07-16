@@ -19,11 +19,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
       - name: Run checks
         env:
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           PSI_KEY:              ${{ secrets.PSI_KEY }}
+          GA_PROPERTY_ID:       ${{ secrets.GA_PROPERTY_ID }}
+          GA_SA_KEY:            ${{ secrets.GA_SA_KEY }}
           RUN_TYPE:             scheduled
         run: node scripts/check.mjs
