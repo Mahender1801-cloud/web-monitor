@@ -498,10 +498,12 @@ async function loadAll(manual){
       document.getElementById('banner').style.display='none';
       document.getElementById('foot').textContent='Connected · '+new URL(CONFIG.url).hostname;
       setPulse(true,'live');
-      await loadAudience();
+      // FIRST PAINT immediately (windowed audience comes from the loaded rows).
       updateDots(); renderView(curView==='task'?null:curView); if(curView==='task')renderTask();
       document.getElementById('refreshBtn').textContent='↻ Refresh';
-      // BACKGROUND: pull the rest of the history in parallel, dedupe, re-render.
+      // BACKGROUND 1: accurate all-time audience counts, then refresh.
+      loadAudience().then(()=>{ if(curView==='summary')renderSummary(); }).catch(()=>{});
+      // BACKGROUND 2: pull the rest of the history in parallel, dedupe, re-render.
       if((DATA.rum.length||0)>=1000){
         fetchRemainingRum(12000).then(more=>{
           if(more&&more.length){
