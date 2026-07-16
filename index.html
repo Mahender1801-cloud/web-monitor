@@ -83,6 +83,16 @@ a{color:inherit}
 .delta{font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:3px;margin-top:6px}
 .delta.up{color:var(--poor)}.delta.down{color:var(--good)}.delta.flat{color:var(--faint)}
 .delta .base{color:var(--faint);font-weight:400;margin-left:3px}
+/* audience card header + pivot button + pivot table */
+.cardhd{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.pivbtn{border:1px solid var(--line);background:var(--surface);color:var(--muted);font-size:10.5px;font-weight:600;padding:3px 8px;border-radius:6px}
+.pivbtn:hover{border-color:var(--accent);color:var(--accent)}
+.piv{width:100%;border-collapse:collapse;font-size:12.5px}
+.piv th{text-align:left;font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);font-weight:600;padding:9px 10px;border-bottom:1px solid var(--line)}
+.piv th.m,.piv td.cell{text-align:center}
+.piv td{padding:8px 10px;border-bottom:1px solid var(--line2)}
+.piv tr.avg td{background:#FAFBFC;font-weight:600}
+.slidehint{display:none;text-align:center;color:var(--faint);font-size:11px;margin-top:8px;letter-spacing:.04em}
 .metric{font-family:'JetBrains Mono';font-size:27px;font-weight:600;letter-spacing:-.02em;margin-top:9px;line-height:1}
 .metric small{font-size:13px;color:var(--faint);font-weight:400;margin-left:3px}
 .metric-sub{font-size:11.5px;color:var(--faint);margin-top:7px;display:flex;align-items:center;gap:6px}
@@ -159,7 +169,15 @@ a{color:inherit}
   /* transform-based hide = fully off-screen regardless of width (no peek) */
   .side{position:fixed;top:0;left:0;width:250px;transform:translateX(-100%);transition:transform .2s;z-index:30}
   .side.open{transform:translateX(0)}
-  .g5,.g4,.g3,.g2{grid-template-columns:1fr 1fr}
+  .g5,.g3,.g2{grid-template-columns:1fr 1fr}
+  /* compact KPI tiles — 2 per row, less wasted space */
+  #sumTiles .card{padding:12px 13px}
+  #sumTiles .metric{font-size:20px;margin-top:6px}
+  #sumTiles h3{font-size:11px}
+  /* pie charts become a swipeable slider instead of 4 tall stacked cards */
+  .audience{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;gap:12px;padding-bottom:4px;-webkit-overflow-scrolling:touch}
+  .audience .card{min-width:84%;scroll-snap-align:center;flex-shrink:0}
+  .slidehint{display:block}
   .menubtn{display:inline-flex}
   .top{padding:11px 14px;gap:10px}.top h1{font-size:16px}.top .sub{display:none}
   .wrap{padding:16px 12px 48px}
@@ -182,7 +200,7 @@ a{color:inherit}
   .live .btn{padding:6px 9px;font-size:12px}
 }
 @media(max-width:480px){
-  .g5,.g4,.g3,.g2{grid-template-columns:1fr}
+  .g3,.g2{grid-template-columns:1fr}
   .live span#livelbl{display:none}
 }
 </style>
@@ -245,12 +263,13 @@ a{color:inherit}
         <div class="section-h"><h2>Real-user trend</h2><span id="sumRange">last 7 days</span></div>
         <div class="card"><h3>LCP p75 over time</h3><div class="chartbox"><canvas id="trendChart"></canvas></div></div>
         <div class="section-h"><h2>Audience &amp; network</h2><span id="audRange"></span></div>
-        <div class="grid g4">
-          <div class="card"><h3>Device</h3><div class="chartbox sm"><canvas id="deviceChart"></canvas></div></div>
-          <div class="card"><h3>Operating system</h3><div class="chartbox sm"><canvas id="osChart"></canvas></div></div>
-          <div class="card"><h3>Network</h3><div class="chartbox sm"><canvas id="netChart"></canvas></div></div>
-          <div class="card"><h3>Referrer source</h3><div class="chartbox sm"><canvas id="refChart"></canvas></div></div>
+        <div class="grid g4 audience" id="audienceGrid">
+          <div class="card"><div class="cardhd"><h3>Device</h3><button class="pivbtn" onclick="showPivot('device')">▦ Pivot</button></div><div class="chartbox sm"><canvas id="deviceChart"></canvas></div></div>
+          <div class="card"><div class="cardhd"><h3>Operating system</h3><button class="pivbtn" onclick="showPivot('os')">▦ Pivot</button></div><div class="chartbox sm"><canvas id="osChart"></canvas></div></div>
+          <div class="card"><div class="cardhd"><h3>Network</h3><button class="pivbtn" onclick="showPivot('net')">▦ Pivot</button></div><div class="chartbox sm"><canvas id="netChart"></canvas></div></div>
+          <div class="card"><div class="cardhd"><h3>Referrer source</h3><button class="pivbtn" onclick="showPivot('ref')">▦ Pivot</button></div><div class="chartbox sm"><canvas id="refChart"></canvas></div></div>
         </div>
+        <div class="slidehint" id="slidehint">‹ swipe charts ›</div>
         <div class="section-h"><h2>Slowest paths</h2><span>by LCP p75</span></div>
         <div class="wv"><table><thead><tr><th>Path</th><th class="m">Views</th><th class="m">LCP p75</th><th class="m">INP p75</th><th class="m">CLS p75</th></tr></thead><tbody id="slowPaths"></tbody></table></div>
       </section>
@@ -305,7 +324,7 @@ a{color:inherit}
         </div>
         <div class="scroll">
           <table class="tbl"><thead><tr>
-            <th>Time</th><th>Path</th><th>Device</th><th>Browser</th><th>Conn</th>
+            <th>Time</th><th>Path</th><th>Referrer</th><th>Device</th><th>Browser</th><th>Conn</th>
             <th>LCP</th><th>INP</th><th>CLS</th><th>FCP</th><th>TTFB</th><th></th>
           </tr></thead><tbody id="liveBody"></tbody></table>
         </div>
@@ -363,6 +382,8 @@ a{color:inherit}
 </div>
 <!-- raw modal -->
 <div class="modal-bg" id="rawModal"><div class="modal"><h3>Raw event</h3><pre id="rawPre"></pre><div style="text-align:right;margin-top:14px"><button class="btn" onclick="document.getElementById('rawModal').classList.remove('on')">Close</button></div></div></div>
+<!-- pivot modal -->
+<div class="modal-bg" id="pivModal"><div class="modal" style="max-width:640px"><h3 id="pivTitle">Pivot</h3><div id="pivBody" style="overflow-x:auto"></div><div style="text-align:right;margin-top:14px"><button class="btn" onclick="closePiv()">Close</button></div></div></div>
 
 <script>
 /* ============================ CONFIG ============================ */
@@ -689,6 +710,32 @@ function renderAudience(rows){
 }
 let audTimer; function refreshAudienceSoon(){clearTimeout(audTimer);audTimer=setTimeout(async()=>{await loadAudience();if(curView==='summary')renderSummary();},5000);}
 let sumTimer; function renderSummarySoon(){clearTimeout(sumTimer);sumTimer=setTimeout(()=>{if(curView==='summary')renderSummary();},1200);}
+/* ---- Pivot report: a dimension (device/os/net/ref) broken down by page group ---- */
+function pageGroup(p){p=p||'/';if(p==='/'||p==='')return 'Homepage';if(p.startsWith('/collections'))return 'Collections';if(p.startsWith('/products'))return 'Products';if(p.startsWith('/cart'))return 'Cart';if(p.startsWith('/pages'))return 'Pages';if(p.startsWith('/apps'))return 'Apps';return 'Other';}
+function dimValue(r,dim){
+  if(dim==='device')return cap(r.device)||'Other';
+  if(dim==='os')return r.os||'Other';
+  if(dim==='net')return r.connection||'unknown';
+  const x=(r.referrer||'').toLowerCase();
+  if(!x)return'Direct';if(x.includes('instagram'))return'Instagram';if(x.includes('facebook'))return'Facebook';if(x.includes('google'))return'Google';if(x.includes('hashtageyewear'))return'Internal';return'Other';
+}
+function showPivot(dim){
+  const cur=windowRange(), rows=rowsIn(cur.from,cur.to);
+  const ORDER=['Homepage','Collections','Products','Cart','Pages','Apps','Other'];
+  const groups=ORDER.filter(g=>rows.some(r=>pageGroup(r.path)===g));
+  const cats={};
+  rows.forEach(r=>{const c=dimValue(r,dim),g=pageGroup(r.path);cats[c]=cats[c]||{_t:0};cats[c][g]=(cats[c][g]||0)+1;cats[c]._t++;});
+  const catList=Object.keys(cats).sort((a,b)=>cats[b]._t-cats[a]._t);
+  const title={device:'Device',os:'Operating system',net:'Network',ref:'Referrer source'}[dim];
+  let h=`<table class="piv"><thead><tr><th>${title}</th>${groups.map(g=>`<th class="m">${g}</th>`).join('')}<th class="m">Total</th></tr></thead><tbody>`;
+  catList.forEach(c=>{ h+=`<tr><td>${c}</td>${groups.map(g=>`<td class="cell mono">${cats[c][g]||0}</td>`).join('')}<td class="cell mono"><b>${cats[c]._t}</b></td></tr>`; });
+  h+=`<tr class="avg"><td>Total</td>${groups.map(g=>`<td class="cell mono">${rows.filter(r=>pageGroup(r.path)===g).length}</td>`).join('')}<td class="cell mono"><b>${rows.length}</b></td></tr></tbody></table>`;
+  if(!rows.length) h='<div class="empty">No data in this range</div>';
+  document.getElementById('pivTitle').textContent=title+' × page  ·  '+cur.label;
+  document.getElementById('pivBody').innerHTML=h;
+  document.getElementById('pivModal').classList.add('on');
+}
+function closePiv(){document.getElementById('pivModal').classList.remove('on');}
 function baseOpts(unit){return{plugins:{legend:{display:false},tooltip:{intersect:false,mode:'index'}},scales:{x:{grid:{display:false},ticks:{font:{size:9},color:'#9AA3B2',maxRotation:0,autoSkip:true,maxTicksLimit:8}},y:{grid:{color:'#F0F1F4'},ticks:{font:{size:10},callback:v=>v+(unit||'')}}},maintainAspectRatio:false};}
 
 /* ===================== WEB VITALS TABLE ================== */
@@ -754,12 +801,15 @@ function renderLive(){
   document.getElementById('liveCount').textContent=rows.length+' events';
   document.getElementById('liveBody').innerHTML=rows.map((r,i)=>`<tr class="${i===0&&r._fresh?'fresh':''}">
     <td class="mono" style="color:var(--faint)">${new Date(r.created_at).toLocaleTimeString()}</td>
-    <td>${(r.path||'—').slice(0,34)}</td><td><span class="chip">${r.device||'—'}</span></td>
+    <td title="${r.url||r.path||''}">${(r.path||'—').slice(0,30)}</td>
+    <td title="${r.referrer||'direct'}">${refShort(r.referrer)}</td>
+    <td><span class="chip">${r.device||'—'}</span></td>
     <td>${r.browser||'—'}</td><td class="mono">${r.connection||'—'}</td>
     ${liveCell('lcp',r.lcp,fmtMs)}${liveCell('inp',r.inp,fmtMs)}${liveCell('cls',r.cls,fmtCls)}${liveCell('fcp',r.fcp,fmtMs)}${liveCell('ttfb',r.ttfb,fmtMs)}
     <td><button class="raw-btn" onclick='showRaw(${JSON.stringify(r).replace(/'/g,"&#39;")})'>raw</button></td>
-  </tr>`).join('')||'<tr><td colspan=11 class="empty">No matching events</td></tr>';
+  </tr>`).join('')||'<tr><td colspan=12 class="empty">No matching events</td></tr>';
 }
+function refShort(u){ if(!u)return '<span style="color:var(--faint)">direct</span>'; try{ const h=new URL(u).hostname.replace(/^www\./,''); return h.length>18?h.slice(0,18)+'…':h; }catch{ return (u||'').slice(0,18); } }
 function liveCell(m,v,f){const rt=rate(m,v);return `<td class="mono cellval ${rt}" style="font-size:12px">${f(v)}</td>`;}
 function showRaw(r){document.getElementById('rawPre').textContent=JSON.stringify(r,null,2);document.getElementById('rawModal').classList.add('on');}
 
