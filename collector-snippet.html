@@ -137,5 +137,9 @@
 
   addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
   addEventListener('pagehide', flush);
-  setTimeout(flush, 8000);   // safety flush for visitors who linger
+  // LCP/CLS/INP are only FINAL when the page is hidden, and dwell time isn't
+  // known until then either. An earlier 8s timer sent early, which capped every
+  // time_on_page at 8s and truncated INP/CLS.
+  // Long-stop insurance only: catches a session the browser never hides/unloads.
+  setTimeout(flush, 600000);   // 10 min
 </script>

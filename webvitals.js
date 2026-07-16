@@ -113,6 +113,11 @@ function flush() {
 
 onLCP(record); onCLS(record); onINP(record); onFCP(record); onTTFB(record);
 
+// LCP/CLS/INP are only FINAL when the page is hidden, and dwell time isn't known
+// until then either — so the real send happens here. (An earlier 8s timer sent
+// early, which capped every time_on_page at 8s and truncated INP/CLS.)
 addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
 addEventListener('pagehide', flush);
-setTimeout(flush, 8000);   // safety flush for visitors who linger
+// Long-stop insurance only: catches a session the browser never hides/unloads.
+// Deliberately long so it does not cap normal dwell times.
+setTimeout(flush, 600000);   // 10 min
