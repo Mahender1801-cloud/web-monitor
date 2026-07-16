@@ -33,6 +33,21 @@ const os = /Windows/.test(ua) ? 'Windows' : /Android/.test(ua) ? 'Android'
 const m = {};                 // collected metrics keyed by name
 let sent = false;
 
+// ---- Time on page: accumulate only VISIBLE time, so a tab left open in the
+// background doesn't inflate it. Correct regardless of listener order, because
+// payload() adds the still-running segment itself.
+let engagedMs = 0;
+let visStart = (document.visibilityState === 'visible') ? performance.now() : null;
+let interacted = false;
+addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    if (visStart !== null) { engagedMs += performance.now() - visStart; visStart = null; }
+  } else if (visStart === null) { visStart = performance.now(); }
+});
+['click', 'keydown', 'scroll'].forEach(e =>
+  addEventListener(e, () => { interacted = true; }, { once: true, passive: true }));
+function timeOnPage() { return Math.round(engagedMs + (visStart !== null ? performance.now() - visStart : 0)); }
+
 function record(metric) {
   const a = metric.attribution || {};
   const e = { value: round(metric.value), rating: metric.rating };
@@ -73,6 +88,8 @@ function payload() {
     utm_source: utm('source'), utm_medium: utm('medium'), utm_campaign: utm('campaign'),
     screen: screenSize, lang,
     ga_client_id: gaClientId, ga_session_id: gaSessionId,
+    time_on_page: timeOnPage(),
+    is_bounce: (timeOnPage() < 5000 && !interacted),
     raw: { metrics: m, ua, utm_term: utm('term'), utm_content: utm('content'), title: document.title, pixelRatio: devicePixelRatio || null }
   };
 }
