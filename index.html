@@ -84,9 +84,24 @@ a{color:inherit}
 .delta.up{color:var(--poor)}.delta.down{color:var(--good)}.delta.flat{color:var(--faint)}
 .delta .base{color:var(--faint);font-weight:400;margin-left:3px}
 /* audience card header + pivot button + pivot table */
-.cardhd{display:flex;align-items:center;justify-content:space-between;gap:8px}
-.pivbtn{border:1px solid var(--line);background:var(--surface);color:var(--muted);font-size:10.5px;font-weight:600;padding:3px 8px;border-radius:6px}
-.pivbtn:hover{border-color:var(--accent);color:var(--accent)}
+.cardhd{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-shrink:0}
+.pivbtn{border:1px solid var(--line);background:var(--surface);color:var(--muted);font-size:10.5px;font-weight:600;padding:3px 8px;border-radius:6px;white-space:nowrap}
+.pivbtn:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+/* ---- flip card: 3D pie on the front, pivot table on the back ---- */
+.flipcard{perspective:1400px;background:none;border:0;box-shadow:none;padding:0;height:300px}
+.flipinner{position:relative;width:100%;height:100%;transform-style:preserve-3d;transition:transform .65s cubic-bezier(.4,.15,.2,1)}
+.flipcard.flipped .flipinner{transform:rotateY(-180deg)}   /* flips right -> left */
+.face{position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 15px;box-shadow:var(--shadow);display:flex;flex-direction:column}
+.face.back{transform:rotateY(180deg)}
+.pivwrap{flex:1;overflow:auto;margin-top:8px}
+/* ---- 3D pie: perspective tilt + drop shadow gives real depth ---- */
+.pie3d{position:relative;flex:1;min-height:0;margin-top:4px;perspective:800px;display:flex;align-items:center;justify-content:center}
+.pie3d canvas{transform:rotateX(56deg);filter:drop-shadow(0 14px 7px rgba(16,23,40,.38)) drop-shadow(0 5px 2px rgba(16,23,40,.22));transition:transform .5s ease}
+.flipcard:hover .pie3d canvas{transform:rotateX(46deg)}
+.legend{display:flex;flex-wrap:wrap;gap:5px 10px;justify-content:center;margin-top:10px;font-size:10.5px;color:var(--muted);flex-shrink:0}
+.legend .lg{display:inline-flex;align-items:center;gap:4px}
+.legend i{width:8px;height:8px;border-radius:2px;display:inline-block;flex-shrink:0}
+.legend b{color:var(--ink);font-weight:600}
 .piv{width:100%;border-collapse:collapse;font-size:12.5px}
 .piv th{text-align:left;font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);font-weight:600;padding:9px 10px;border-bottom:1px solid var(--line)}
 .piv th.m,.piv td.cell{text-align:center}
@@ -176,7 +191,7 @@ a{color:inherit}
   #sumTiles h3{font-size:11px}
   /* pie charts become a swipeable slider instead of 4 tall stacked cards */
   .audience{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;gap:12px;padding-bottom:4px;-webkit-overflow-scrolling:touch}
-  .audience .card{min-width:84%;scroll-snap-align:center;flex-shrink:0}
+  .audience .flipcard{min-width:86%;scroll-snap-align:center;flex-shrink:0;height:300px}
   .slidehint{display:block}
   .menubtn{display:inline-flex}
   .top{padding:11px 14px;gap:10px}.top h1{font-size:16px}.top .sub{display:none}
@@ -263,13 +278,8 @@ a{color:inherit}
         <div class="section-h"><h2>Real-user trend</h2><span id="sumRange">last 7 days</span></div>
         <div class="card"><h3>LCP p75 over time</h3><div class="chartbox"><canvas id="trendChart"></canvas></div></div>
         <div class="section-h"><h2>Audience &amp; network</h2><span id="audRange"></span></div>
-        <div class="grid g4 audience" id="audienceGrid">
-          <div class="card"><div class="cardhd"><h3>Device</h3><button class="pivbtn" onclick="showPivot('device')">▦ Pivot</button></div><div class="chartbox sm"><canvas id="deviceChart"></canvas></div></div>
-          <div class="card"><div class="cardhd"><h3>Operating system</h3><button class="pivbtn" onclick="showPivot('os')">▦ Pivot</button></div><div class="chartbox sm"><canvas id="osChart"></canvas></div></div>
-          <div class="card"><div class="cardhd"><h3>Network</h3><button class="pivbtn" onclick="showPivot('net')">▦ Pivot</button></div><div class="chartbox sm"><canvas id="netChart"></canvas></div></div>
-          <div class="card"><div class="cardhd"><h3>Referrer source</h3><button class="pivbtn" onclick="showPivot('ref')">▦ Pivot</button></div><div class="chartbox sm"><canvas id="refChart"></canvas></div></div>
-        </div>
-        <div class="slidehint" id="slidehint">‹ swipe charts ›</div>
+        <div class="grid g4 audience" id="audienceGrid"></div>
+        <div class="slidehint" id="slidehint">‹ swipe charts · tap ▦ Table to flip ›</div>
         <div class="section-h"><h2>Slowest paths</h2><span>by LCP p75</span></div>
         <div class="wv"><table><thead><tr><th>Path</th><th class="m">Views</th><th class="m">LCP p75</th><th class="m">INP p75</th><th class="m">CLS p75</th></tr></thead><tbody id="slowPaths"></tbody></table></div>
       </section>
@@ -382,8 +392,6 @@ a{color:inherit}
 </div>
 <!-- raw modal -->
 <div class="modal-bg" id="rawModal"><div class="modal"><h3>Raw event</h3><pre id="rawPre"></pre><div style="text-align:right;margin-top:14px"><button class="btn" onclick="document.getElementById('rawModal').classList.remove('on')">Close</button></div></div></div>
-<!-- pivot modal -->
-<div class="modal-bg" id="pivModal"><div class="modal" style="max-width:640px"><h3 id="pivTitle">Pivot</h3><div id="pivBody" style="overflow-x:auto"></div><div style="text-align:right;margin-top:14px"><button class="btn" onclick="closePiv()">Close</button></div></div></div>
 
 <script>
 /* ============================ CONFIG ============================ */
@@ -691,21 +699,54 @@ function audienceFromRows(rows){
   const refCat=r=>{const x=(r.referrer||'').toLowerCase();if(!x)return'Direct';if(x.includes('instagram'))return'Instagram';if(x.includes('facebook'))return'Facebook';if(x.includes('google'))return'Google';if(x.includes('hashtageyewear'))return'Internal';return'Other';};
   return {total:rows.length,device:g(r=>cap(r.device)),os:g(r=>r.os),net:g(r=>r.connection),ref:g(refCat)};
 }
-function drawDoughnut(id,key,entries,pal){
+/* ---- 3D pie (perspective-tilted) + custom HTML legend ---- */
+const AUD_DIMS=[
+  {k:'device',title:'Device',        canvas:'deviceChart', pal:()=>DEVPAL},
+  {k:'os',    title:'Operating system',canvas:'osChart',   pal:()=>OSPAL},
+  {k:'net',   title:'Network',       canvas:'netChart',    pal:()=>NETPAL},
+  {k:'ref',   title:'Referrer source',canvas:'refChart',   pal:()=>REFPAL},
+];
+function buildAudienceCards(){
+  const el=document.getElementById('audienceGrid'); if(!el)return;
+  el.innerHTML=AUD_DIMS.map(d=>`
+    <div class="flipcard" id="fc-${d.k}">
+      <div class="flipinner">
+        <div class="face front">
+          <div class="cardhd"><h3>${d.title}</h3><button class="pivbtn" onclick="flipCard('${d.k}',1)">▦ Table</button></div>
+          <div class="pie3d"><canvas id="${d.canvas}"></canvas></div>
+          <div class="legend" id="${d.k}Legend"></div>
+        </div>
+        <div class="face back">
+          <div class="cardhd"><h3>${d.title} × page</h3><button class="pivbtn" onclick="flipCard('${d.k}',0)">◔ Chart</button></div>
+          <div class="pivwrap" id="${d.k}Pivot"></div>
+        </div>
+      </div>
+    </div>`).join('');
+}
+function flipCard(k,toBack){ const c=document.getElementById('fc-'+k); if(c)c.classList.toggle('flipped',!!toBack); }
+function drawPie3d(id,key,entries,pal,legendId){
   const ctx=document.getElementById(id); if(!ctx)return;
   if(charts[key])charts[key].destroy();
-  charts[key]=new Chart(ctx,{type:'doughnut',
-    data:{labels:entries.map(e=>e[0]),datasets:[{data:entries.map(e=>e[1]),backgroundColor:pal,borderWidth:0}]},
-    options:{cutout:'60%',maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:8,font:{size:10},padding:7}}}}});
+  charts[key]=new Chart(ctx,{type:'pie',
+    data:{labels:entries.map(e=>e[0]),datasets:[{data:entries.map(e=>e[1]),backgroundColor:pal,borderWidth:1,borderColor:'rgba(255,255,255,.55)'}]},
+    options:{maintainAspectRatio:false,animation:{animateRotate:true,duration:700},
+      plugins:{legend:{display:false},tooltip:{enabled:true}}}});
+  const lg=document.getElementById(legendId);
+  if(lg){
+    const total=entries.reduce((a,e)=>a+e[1],0)||1;
+    lg.innerHTML=entries.map((e,i)=>`<span class="lg"><i style="background:${pal[i%pal.length]}"></i>${e[0]} <b>${Math.round(e[1]/total*100)}%</b></span>`).join('');
+  }
 }
 function renderAudience(rows){
   // windowed rows when a date filter is active; accurate all-time counts otherwise
   const windowed = rows && RANGE.preset!=='all';
   const a = windowed ? audienceFromRows(rows) : (DATA.audience||audienceFromRows(DATA.rum));
-  drawDoughnut('deviceChart','dev',a.device,DEVPAL);
-  drawDoughnut('osChart','os',a.os,OSPAL);
-  drawDoughnut('netChart','net',a.net,NETPAL);
-  drawDoughnut('refChart','ref',a.ref,REFPAL);
+  drawPie3d('deviceChart','dev',a.device,DEVPAL,'deviceLegend');
+  drawPie3d('osChart','os',a.os,OSPAL,'osLegend');
+  drawPie3d('netChart','net',a.net,NETPAL,'netLegend');
+  drawPie3d('refChart','ref',a.ref,REFPAL,'refLegend');
+  // fill each card's back face with its pivot table
+  AUD_DIMS.forEach(d=>{ const p=document.getElementById(d.k+'Pivot'); if(p)p.innerHTML=pivotHTML(d.k); });
   const el=document.getElementById('audRange'); if(el)el.textContent=(a.total||0).toLocaleString()+(windowed?' sessions in range':' sessions tracked');
 }
 let audTimer; function refreshAudienceSoon(){clearTimeout(audTimer);audTimer=setTimeout(async()=>{await loadAudience();if(curView==='summary')renderSummary();},5000);}
@@ -719,24 +760,22 @@ function dimValue(r,dim){
   const x=(r.referrer||'').toLowerCase();
   if(!x)return'Direct';if(x.includes('instagram'))return'Instagram';if(x.includes('facebook'))return'Facebook';if(x.includes('google'))return'Google';if(x.includes('hashtageyewear'))return'Internal';return'Other';
 }
-function showPivot(dim){
+// Returns the pivot table HTML: dimension rows x page-group columns, for the current date window.
+function pivotHTML(dim){
   const cur=windowRange(), rows=rowsIn(cur.from,cur.to);
+  if(!rows.length) return '<div class="empty">No data in this range</div>';
   const ORDER=['Homepage','Collections','Products','Cart','Pages','Apps','Other'];
   const groups=ORDER.filter(g=>rows.some(r=>pageGroup(r.path)===g));
   const cats={};
   rows.forEach(r=>{const c=dimValue(r,dim),g=pageGroup(r.path);cats[c]=cats[c]||{_t:0};cats[c][g]=(cats[c][g]||0)+1;cats[c]._t++;});
   const catList=Object.keys(cats).sort((a,b)=>cats[b]._t-cats[a]._t);
-  const title={device:'Device',os:'Operating system',net:'Network',ref:'Referrer source'}[dim];
+  const title={device:'Device',os:'OS',net:'Network',ref:'Source'}[dim];
   let h=`<table class="piv"><thead><tr><th>${title}</th>${groups.map(g=>`<th class="m">${g}</th>`).join('')}<th class="m">Total</th></tr></thead><tbody>`;
   catList.forEach(c=>{ h+=`<tr><td>${c}</td>${groups.map(g=>`<td class="cell mono">${cats[c][g]||0}</td>`).join('')}<td class="cell mono"><b>${cats[c]._t}</b></td></tr>`; });
   h+=`<tr class="avg"><td>Total</td>${groups.map(g=>`<td class="cell mono">${rows.filter(r=>pageGroup(r.path)===g).length}</td>`).join('')}<td class="cell mono"><b>${rows.length}</b></td></tr></tbody></table>`;
-  if(!rows.length) h='<div class="empty">No data in this range</div>';
-  document.getElementById('pivTitle').textContent=title+' × page  ·  '+cur.label;
-  document.getElementById('pivBody').innerHTML=h;
-  document.getElementById('pivModal').classList.add('on');
+  return h;
 }
-function closePiv(){document.getElementById('pivModal').classList.remove('on');}
-function baseOpts(unit){return{plugins:{legend:{display:false},tooltip:{intersect:false,mode:'index'}},scales:{x:{grid:{display:false},ticks:{font:{size:9},color:'#9AA3B2',maxRotation:0,autoSkip:true,maxTicksLimit:8}},y:{grid:{color:'#F0F1F4'},ticks:{font:{size:10},callback:v=>v+(unit||'')}}},maintainAspectRatio:false};}
+function baseOpts(unit){return{plugins:{legend:{display:false},tooltip:{intersect:false,mode:'index'}},scales:{x:{grid:{display:false},ticks:{font:{size:9},color:'#9AA3B2',maxRotation:0,autoSkip:true,maxTicksLimit:8}},y:{grid:{color:'#F0F1F4'},ticks:{font:{size:10},callback:v=>(Math.round(v*100)/100)+(unit||'')}}},maintainAspectRatio:false};}
 
 /* ===================== WEB VITALS TABLE ================== */
 /* LIVE, real users — the actual live tracker, built from the beacon (RUM). */
@@ -967,7 +1006,7 @@ function saveConfig(){
 }
 
 /* ===================== BOOT ================== */
-buildNav();initRangeBar();initSB();loadAll().then(subscribe);
+buildNav();buildAudienceCards();initRangeBar();initSB();loadAll().then(subscribe);
 </script>
 </body>
 </html>
