@@ -18,7 +18,7 @@
 }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
-body{background:var(--bg);color:var(--ink);font-family:Inter,system-ui,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased}
+body{background:var(--bg);color:var(--ink);font-family:Inter,system-ui,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;overflow-x:hidden}
 .mono{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
 button{font-family:inherit;cursor:pointer}
 a{color:inherit}
@@ -154,7 +154,30 @@ a{color:inherit}
 .modal h3{margin:0 0 12px;font-family:'Space Grotesk'}
 .modal pre{background:#0E1728;color:#E6E8EF;padding:14px;border-radius:10px;font-size:11.5px;overflow:auto;font-family:'JetBrains Mono';line-height:1.55}
 .empty{padding:40px;text-align:center;color:var(--faint);font-size:13px}
-@media(max-width:820px){.app{grid-template-columns:1fr}.side{position:fixed;left:-260px;transition:.2s;z-index:30}.side.open{left:0}.g5,.g4,.g3,.g2{grid-template-columns:1fr 1fr}.menubtn{display:inline-flex}}
+@media(max-width:820px){
+  .app{grid-template-columns:1fr}
+  .side{position:fixed;top:0;width:250px;left:-250px;transition:.2s;z-index:30}.side.open{left:0}
+  .g5,.g4,.g3,.g2{grid-template-columns:1fr 1fr}
+  .menubtn{display:inline-flex}
+  .top{padding:11px 14px;gap:10px}.top h1{font-size:16px}
+  .wrap{padding:16px 12px 48px}
+  /* wide tables scroll horizontally instead of overflowing/clipping */
+  .wv{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .wv table{min-width:640px}
+  .scroll{overflow:auto}.scroll .tbl{min-width:720px}
+  /* date-range + compare controls stack cleanly */
+  .rangebar{gap:9px}
+  .segs{flex-wrap:wrap}
+  .cmp{margin-left:0;width:100%;justify-content:flex-start}
+  .customrange{flex-wrap:wrap}
+  .toolbar{gap:7px}
+  .metric{font-size:23px}
+  .live .btn{padding:6px 9px;font-size:12px}
+}
+@media(max-width:480px){
+  .g5,.g4,.g3,.g2{grid-template-columns:1fr}
+  .live span#livelbl{display:none}
+}
 </style>
 </head>
 <body>
@@ -451,31 +474,44 @@ function showView(v){document.querySelectorAll('.view').forEach(s=>s.classList.t
 function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='monitors')renderMonitors(); }
 
 /* ===================== DATA LOAD ================== */
-async function fetchAllRum(maxRows){
-  const page=1000; let out=[];
-  for(let off=0; off<maxRows; off+=page){
-    const {data,error}=await sb.from('rum_events').select('*').order('created_at',{ascending:false}).range(off,off+page-1);
-    if(error||!data||!data.length) break;
-    out=out.concat(data);
-    if(data.length<page) break;   // last page reached
+// Fetch older history pages IN PARALLEL (PostgREST caps one request at 1000 rows).
+async function fetchRemainingRum(maxRows){
+  const page=1000, reqs=[];
+  for(let off=page; off<maxRows; off+=page){
+    reqs.push(sb.from('rum_events').select('*').order('created_at',{ascending:false}).range(off,off+page-1).then(r=>r.data||[]).catch(()=>[]));
   }
-  return out;
+  return (await Promise.all(reqs)).flat();
 }
 async function loadAll(manual){
   document.getElementById('refreshBtn').textContent='↻ …';
   if(LIVE && sb){
     try{
-      const [rum,psi,mon,items,checks]=await Promise.all([
-        fetchAllRum(12000),   // paginated — PostgREST caps a single request at 1000 rows
+      // FAST FIRST PAINT: first page + small tables in parallel, render immediately.
+      const [rum1,psi,mon,items,checks]=await Promise.all([
+        sb.from('rum_events').select('*').order('created_at',{ascending:false}).range(0,999),
         sb.from('psi_results').select('*').order('created_at',{ascending:false}).limit(200),
         sb.from('monitors').select('*').order('created_at'),
         sb.from('task_items').select('*').order('sort'),
         sb.from('task_checks').select('*').order('created_at',{ascending:false}).limit(600),
       ]);
-      DATA.rum=rum||[]; DATA.psi=psi.data||[]; DATA.monitors=mon.data||[]; DATA.items=items.data||[]; DATA.checks=checks.data||[];
+      DATA.rum=rum1.data||[]; DATA.psi=psi.data||[]; DATA.monitors=mon.data||[]; DATA.items=items.data||[]; DATA.checks=checks.data||[];
       document.getElementById('banner').style.display='none';
       document.getElementById('foot').textContent='Connected · '+new URL(CONFIG.url).hostname;
       setPulse(true,'live');
+      await loadAudience();
+      updateDots(); renderView(curView==='task'?null:curView); if(curView==='task')renderTask();
+      document.getElementById('refreshBtn').textContent='↻ Refresh';
+      // BACKGROUND: pull the rest of the history in parallel, dedupe, re-render.
+      if((DATA.rum.length||0)>=1000){
+        fetchRemainingRum(12000).then(more=>{
+          if(more&&more.length){
+            const seen=new Set(DATA.rum.map(r=>r.id));
+            DATA.rum=DATA.rum.concat(more.filter(r=>!seen.has(r.id)));
+            if(curView==='summary')renderSummary(); else if(curView==='monitors')renderMonitors(); else renderView(curView);
+          }
+        }).catch(()=>{});
+      }
+      return;
     }catch(e){ console.error(e); alert('Load failed: '+e.message); }
   } else {
     DATA.rum=makeSampleRUM(1600); DATA.psi=makeSamplePSI(); DATA.monitors=SAMPLE_MON; DATA.items=SAMPLE_ITEMS; DATA.checks=makeSampleChecks();
