@@ -45,6 +45,8 @@ create index if not exists rum_events_path_idx    on public.rum_events (path);
 create table if not exists public.monitors (
   id         uuid primary key default gen_random_uuid(),
   created_at timestamptz not null default now(),
+  screenshot_mobile  text,
+  screenshot_desktop text,
   label      text not null,
   url        text not null unique,
   active     boolean not null default true,
