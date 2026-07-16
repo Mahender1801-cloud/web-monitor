@@ -340,6 +340,25 @@ a{color:inherit}
         </div>
       </section>
 
+      <!-- PURCHASES -->
+      <section class="view" data-view="purchases">
+        <div class="grid g4" id="buyTiles"></div>
+        <div class="section-h"><h2>Did speed cost the sale?</h2><span>buyers vs non-buyers · same window as Summary</span></div>
+        <div class="wv"><table>
+          <thead><tr><th>Visitor group</th><th class="m">Visitors</th><th class="m">Buyers</th><th class="m">Conv. rate</th><th class="m">LCP p75</th><th class="m">Avg time on page</th></tr></thead>
+          <tbody id="speedVsConv"></tbody>
+        </table></div>
+        <div class="section-h"><h2>Recent orders</h2><span id="buyNote">what each buyer actually experienced on the site</span></div>
+        <div class="wv"><table>
+          <thead><tr><th>When</th><th>Transaction ID</th><th class="m">Value</th><th class="m">Device</th><th>Pages seen</th><th class="m">Their LCP</th><th class="m">Time on site</th></tr></thead>
+          <tbody id="buyBody"></tbody>
+        </table></div>
+        <p style="color:var(--faint);font-size:11.5px;margin-top:12px">
+          Orders arrive from the Shopify <b>checkout_completed</b> pixel and are matched to the shopper's own page-speed data via GA4's client id.
+          <b>No names or emails are stored</b> — for customer identity use Shopify → Orders. Rows show <span class="mono">—</span> where a buyer blocked cookies and couldn't be matched.
+        </p>
+      </section>
+
       <!-- MONITORS -->
       <section class="view" data-view="monitors">
         <div class="toolbar">
@@ -474,7 +493,7 @@ const SAMPLE_ITEMS=[
 ].map((r,i)=>({id:'i'+i,category:r[0],item:r[1],check_type:r[2],auto_key:r[3],sort:i}));
 
 /* ===================== STATE ================== */
-let DATA={ rum:[], psi:[], monitors:[], items:[], checks:[] };
+let DATA={ rum:[], psi:[], monitors:[], items:[], checks:[], purchases:[] };
 let curView='summary', curCat=null, charts={};
 
 /* ===================== NAV ================== */
@@ -485,6 +504,7 @@ function buildNav(){
     ${navBtn('summary','Summary','📊')}
     ${navBtn('webvitals','Web Vitals','◐')}
     ${navBtn('live','Live Data','⚡')}
+    ${navBtn('purchases','Purchases','🛒')}
     ${navBtn('monitors','Monitors','🔗')}
     <h4>QA Tasks</h4>`;
   TASK_CATS.forEach(c=> h+=navBtn('cat:'+c, c.replace(' Testing',''), CAT_ICON[c]||'•', true));
@@ -504,10 +524,78 @@ function toggleSide(force){
   document.getElementById('side').classList.toggle('open', open);
   document.getElementById('backdrop').classList.toggle('on', open);
 }
-const TITLES={summary:['Summary','Real-user performance across the store'],webvitals:['Web Vitals','Live from your visitors · PageSpeed as cross-check'],live:['Live Data','Raw events streaming from real visitors'],monitors:['Monitors','Per-page Web Vitals by device · 10-day daily sparklines']};
+const TITLES={summary:['Summary','Real-user performance across the store'],webvitals:['Web Vitals','Live from your visitors · PageSpeed as cross-check'],live:['Live Data','Raw events streaming from real visitors'],purchases:['Purchases','Real orders · what each buyer actually experienced'],monitors:['Monitors','Per-page Web Vitals by device · 10-day daily sparklines']};
 function setTitle(t,s){document.getElementById('vtitle').textContent=t;document.getElementById('vsub').textContent=s;}
 function showView(v){document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on', s.dataset.view===v));}
-function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='monitors')renderMonitors(); }
+function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='purchases')renderPurchases(); if(v==='monitors')renderMonitors(); }
+
+/* ===================== PURCHASES ================== */
+const money=v=>(v==null?'—':'₹'+Math.round(v).toLocaleString('en-IN'));
+function renderPurchases(){
+  const cur=windowRange();
+  const buys=(DATA.purchases||[]).filter(p=>{const t=+new Date(p.created_at);return t>=cur.from&&t<=cur.to;});
+  const rows=rowsIn(cur.from,cur.to);
+
+  // index this window's RUM rows by GA client id -> that shopper's real experience
+  const byClient={};
+  rows.forEach(r=>{ if(r.ga_client_id){ (byClient[r.ga_client_id]=byClient[r.ga_client_id]||[]).push(r); } });
+
+  const revenue=buys.reduce((a,p)=>a+(+p.value||0),0);
+  const aov=buys.length?revenue/buys.length:null;
+  const visitors=Object.keys(byClient).length;
+  const buyerIds=new Set(buys.map(p=>p.ga_client_id).filter(Boolean));
+  const cvr=visitors?(buyerIds.size/visitors*100):null;
+
+  document.getElementById('buyTiles').innerHTML=[
+    ['Orders', buys.length.toLocaleString(), cur.label],
+    ['Revenue', money(revenue), cur.label],
+    ['Avg order value', money(aov), buys.length?`${buys.length} orders`:'no orders yet'],
+    ['Conversion rate', cvr==null?'—':cvr.toFixed(2)+'%', `${buyerIds.size} of ${visitors.toLocaleString()} matched visitors`],
+  ].map(([h,v,sub])=>`<div class="card"><h3>${h}</h3><div class="metric" style="color:var(--ink)">${v}</div><div class="metric-sub">${sub}</div></div>`).join('');
+
+  // fast vs slow: did speed cost the sale?
+  const groups=[['Fast (LCP ≤ 2.5s)',r=>r.lcp!=null&&r.lcp<=2500],['Needs work (2.5–4s)',r=>r.lcp!=null&&r.lcp>2500&&r.lcp<=4000],['Slow (LCP > 4s)',r=>r.lcp!=null&&r.lcp>4000]];
+  document.getElementById('speedVsConv').innerHTML=groups.map(([label,test])=>{
+    const ids=Object.keys(byClient).filter(id=>byClient[id].some(test));
+    const bought=ids.filter(id=>buyerIds.has(id)).length;
+    const rate=ids.length?(bought/ids.length*100):null;
+    const lcps=[].concat(...ids.map(id=>byClient[id].map(r=>r.lcp)));
+    const dwell=[].concat(...ids.map(id=>byClient[id].map(r=>r.time_on_page))).filter(x=>x!=null);
+    const avgD=dwell.length?dwell.reduce((a,b)=>a+b,0)/dwell.length:null;
+    const rt=rate==null?'na':(rate>=2?'good':rate>=1?'warn':'poor');
+    return `<tr><td class="pg">${label}</td>
+      <td class="cell mono">${ids.length.toLocaleString()}</td>
+      <td class="cell mono">${bought}</td>
+      <td class="cell"><span class="cellval ${rt}">${rate==null?'—':rate.toFixed(2)+'%'}</span></td>
+      ${cellHTML('lcp',p75(lcps),fmtMs)}
+      <td class="cell mono">${avgD==null?'—':(avgD/1000).toFixed(1)+'s'}</td></tr>`;
+  }).join('')||'<tr><td colspan=6 class="empty">No data in this range</td></tr>';
+
+  // recent orders, joined to what that buyer saw
+  const body=document.getElementById('buyBody');
+  if(!buys.length){
+    body.innerHTML='<tr><td colspan=7 class="empty">No orders in this range yet — the Shopify pixel records your next checkout automatically.</td></tr>';
+    return;
+  }
+  body.innerHTML=buys.slice(0,60).map(p=>{
+    const seen=p.ga_client_id?(byClient[p.ga_client_id]||[]):[];
+    const lcp=p75(seen.map(r=>r.lcp));
+    const dwell=seen.map(r=>r.time_on_page).filter(x=>x!=null).reduce((a,b)=>a+b,0);
+    const dev=seen.length?cap(seen[0].device):null;
+    const paths=[...new Set(seen.map(r=>r.path))];
+    const pagesTxt=paths.length?`${paths.length} page${paths.length>1?'s':''} · ${String(paths[0]).slice(0,22)}${paths.length>1?'…':''}`:'<span style="color:var(--faint)">not matched</span>';
+    return `<tr>
+      <td class="mono" style="color:var(--faint)">${new Date(p.created_at).toLocaleString()}</td>
+      <td class="mono" title="${p.transaction_id||''}">${String(p.transaction_id||'—').slice(0,16)}</td>
+      <td class="cell mono"><b>${money(p.value)}</b></td>
+      <td class="cell">${dev?`<span class="chip">${dev}</span>`:'<span class="mono" style="color:var(--faint)">—</span>'}</td>
+      <td style="font-size:12px">${pagesTxt}</td>
+      ${cellHTML('lcp',lcp,fmtMs)}
+      <td class="cell mono">${dwell?(dwell/1000).toFixed(1)+'s':'—'}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('buyNote').textContent=`${buys.length} order${buys.length>1?'s':''} · ${buys.filter(p=>p.ga_client_id&&byClient[p.ga_client_id]).length} matched to their browsing data`;
+}
 
 /* ===================== DATA LOAD ================== */
 // Fetch older history pages IN PARALLEL (PostgREST caps one request at 1000 rows).
@@ -523,14 +611,15 @@ async function loadAll(manual){
   if(LIVE && sb){
     try{
       // FAST FIRST PAINT: first page + small tables in parallel, render immediately.
-      const [rum1,psi,mon,items,checks]=await Promise.all([
+      const [rum1,psi,mon,items,checks,buys]=await Promise.all([
         sb.from('rum_events').select('*').order('created_at',{ascending:false}).range(0,999),
         sb.from('psi_results').select('*').order('created_at',{ascending:false}).limit(200),
         sb.from('monitors').select('*').order('created_at'),
         sb.from('task_items').select('*').order('sort'),
         sb.from('task_checks').select('*').order('created_at',{ascending:false}).limit(600),
+        sb.from('purchases').select('*').order('created_at',{ascending:false}).limit(500),
       ]);
-      DATA.rum=rum1.data||[]; DATA.psi=psi.data||[]; DATA.monitors=mon.data||[]; DATA.items=items.data||[]; DATA.checks=checks.data||[];
+      DATA.rum=rum1.data||[]; DATA.psi=psi.data||[]; DATA.monitors=mon.data||[]; DATA.items=items.data||[]; DATA.checks=checks.data||[]; DATA.purchases=buys.data||[];
       document.getElementById('banner').style.display='none';
       document.getElementById('foot').textContent='Connected · '+new URL(CONFIG.url).hostname;
       setPulse(true,'live');
