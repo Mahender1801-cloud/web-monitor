@@ -47,7 +47,9 @@ create table if not exists public.monitors (
   created_at timestamptz not null default now(),
   label      text not null,
   url        text not null unique,
-  active     boolean not null default true
+  active     boolean not null default true,
+  screenshot_mobile  text,   -- cached page thumbnail (data URI), refreshed each run
+  screenshot_desktop text
 );
 
 -- ---------------------------------------------------------------------------

@@ -36,6 +36,29 @@ async function sbInsert(table, rows) {
   });
   if (!r.ok) console.error(`insert ${table}: ${r.status} ${await r.text()}`);
 }
+async function sbPatch(table, idCol, idVal, patch) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${idCol}=eq.${encodeURIComponent(idVal)}`, {
+    method: 'PATCH', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(patch)
+  });
+  if (!r.ok) console.error(`patch ${table}: ${r.status} ${await r.text()}`);
+}
+
+// Fetch a page screenshot and return it as a base64 data URI (cached in the DB
+// so the dashboard loads it instantly instead of hitting a screenshot service).
+async function captureShot(url, viewportWidth, width) {
+  const src = `https://image.thum.io/get/viewportWidth/${viewportWidth}/width/${width}/${url}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await fetch(src, { signal: AbortSignal.timeout(35000) });
+      if (!r.ok) { await sleep(2000); continue; }
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (buf.length < 2000) { await sleep(4000); continue; } // tiny = still generating; retry once
+      const ct = r.headers.get('content-type') || 'image/jpeg';
+      return `data:${ct};base64,${buf.toString('base64')}`;
+    } catch { await sleep(2000); }
+  }
+  return null;
+}
 
 // ---- PageSpeed Insights ----------------------------------------------------
 async function psi(url, strategy) {
@@ -294,6 +317,18 @@ async function runAuto(key, monitor, homepage) {
     }
   }
   if (psiRows.length) await sbInsert('psi_results', psiRows);
+
+  // 1b) Cache per-device page thumbnails into the monitors row (data URIs) so the
+  //     dashboard loads them instantly instead of generating on-demand each visit.
+  for (const mon of monitors) {
+    try {
+      const [shotM, shotD] = [await captureShot(mon.url, 400, 200), await captureShot(mon.url, 1280, 300)];
+      const patch = {};
+      if (shotM) patch.screenshot_mobile = shotM;
+      if (shotD) patch.screenshot_desktop = shotD;
+      if (Object.keys(patch).length) { await sbPatch('monitors', 'id', mon.id, patch); console.log('shot', mon.label, Object.keys(patch).join('+')); }
+    } catch (e) { console.error('shot fail', mon.label, e.message); }
+  }
 
   // 2) Auto task checks. Site-wide probes (ssl/robots/policy/broken_links) run
   //    once; page-level probes (speed/meta/canonical/schema) run per relevant page.

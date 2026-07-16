@@ -13,6 +13,10 @@ alter table public.rum_events add column if not exists utm_campaign text;
 alter table public.rum_events add column if not exists screen       text;
 alter table public.rum_events add column if not exists lang         text;
 
+-- 1b) MONITOR THUMBNAILS (cached page screenshots per device) ---------------
+alter table public.monitors add column if not exists screenshot_mobile  text;
+alter table public.monitors add column if not exists screenshot_desktop text;
+
 -- 2) QA AUTOMATION -----------------------------------------------------------
 update public.task_items set check_type='auto', auto_key='images_load'
   where category='Homepage Testing' and item='Verify banners / sliders are loading properly';

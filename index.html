@@ -113,7 +113,9 @@ a{color:inherit}
 .spark10{display:flex;gap:2px;justify-content:center;align-items:flex-end;height:22px;margin-bottom:5px}
 .spark10 i{width:5px;border-radius:1px;display:block;min-height:3px}
 .monrow{display:flex;align-items:center;gap:11px}
-.montile{border:1px solid var(--line);border-radius:7px;background:var(--line2) center/cover no-repeat;flex-shrink:0;box-shadow:inset 0 0 0 1px #fff}
+.montile{border:1px solid var(--line);border-radius:7px;background:var(--line2);flex-shrink:0;overflow:hidden;position:relative}
+.montile::after{content:"◵";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:14px}
+.montile img{position:relative;width:100%;height:100%;object-fit:cover;object-position:top center;display:block}
 .montile.mobile{width:34px;height:46px}
 .montile.desktop{width:58px;height:42px}
 
@@ -755,13 +757,14 @@ function renderMonitors(){
     return ['mobile','desktop'].map(dev=>{
       const dr=pageRows.filter(r=>r.device===dev);
       const cells=METRICS.map(k=>monCell(k, dailySeries(dr,k,10))).join('') + monCell('views', dailySeries(dr,'views',10));
-      const shot=dev==='mobile'
+      const cached=dev==='mobile'?m.screenshot_mobile:m.screenshot_desktop;
+      const shot=cached || (dev==='mobile'
         ? `https://image.thum.io/get/viewportWidth/400/width/160/${m.url}`
-        : `https://image.thum.io/get/viewportWidth/1280/width/240/${m.url}`;
+        : `https://image.thum.io/get/viewportWidth/1280/width/240/${m.url}`);
       const remove=dev==='mobile'?` · <button class="raw-btn" onclick="delMonitor('${m.id}')">remove</button>`:'';
       return `<tr>
         <td><div class="monrow">
-          <div class="montile ${dev}" style="background-image:url('${shot}')"></div>
+          <div class="montile ${dev}"><img loading="lazy" src="${shot}" alt="" onerror="this.remove()"></div>
           <div class="pg">${m.label} <span class="plat">${dev}</span><small>${m.url}${remove}</small></div>
         </div></td>
         ${cells}
