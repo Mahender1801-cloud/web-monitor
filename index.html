@@ -701,39 +701,75 @@ function deltaHTML(metric,cur,base){
   const f=metric==='cls'?fmtCls:fmtMs;
   return `<div class="delta ${cls}">${arw} ${pct}%<span class="base">vs ${f(base)}</span></div>`;
 }
+// Server-side stats for a window. Postgres does the counting/percentiles over
+// EVERY row — the browser can only ever hold a truncated slice of a 12k/day feed.
+const statsCache={};
+async function fetchStats(from,to){
+  if(!(LIVE&&sb)) return null;
+  const k=from+'_'+to; if(statsCache[k]) return statsCache[k];
+  try{
+    const {data,error}=await sb.rpc('dash_stats',{p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString()});
+    if(error) throw error;
+    statsCache[k]=data; setTimeout(()=>{delete statsCache[k];},60000);
+    return data;
+  }catch(e){ console.warn('dash_stats unavailable — run dash_rpc.sql. Falling back to (truncated) client data.',e.message); return null; }
+}
 function renderSummary(){
   const cur=windowRange();
-  const rc=rowsIn(cur.from,cur.to);
   const mode=(document.getElementById('cmpSel')||{}).value||'prev';
   const cmp=comparisonRange(cur,mode);
+  paintSummary(cur,cmp,null,null);                 // instant paint from cached rows
+  Promise.all([fetchStats(cur.from,cur.to), cmp?fetchStats(cmp.from,cmp.to):Promise.resolve(null)])
+    .then(([s,b])=>{ if(s) paintSummary(cur,cmp,s,b); })   // repaint with true numbers
+    .catch(()=>{});
+}
+function paintSummary(cur,cmp,S,B){
+  const rc=rowsIn(cur.from,cur.to);
   const rb=cmp?rowsIn(cmp.from,cmp.to):null;
   const tiles=[['LCP','lcp',fmtMs],['INP','inp',fmtMs],['CLS','cls',fmtCls],['FCP','fcp',fmtMs],['TTFB','ttfb',fmtMs]];
   document.getElementById('sumTiles').innerHTML=tiles.map(([name,key,f])=>{
-    const v=p75(rc.map(x=>x[key])), rt=rate(key,v), base=rb?p75(rb.map(x=>x[key])):null;
+    const v = S ? (S[key]==null?null:+S[key]) : p75(rc.map(x=>x[key]));
+    const base = B ? (B[key]==null?null:+B[key]) : (rb?p75(rb.map(x=>x[key])):null);
+    const rt=rate(key,v);
     const foot = cmp ? deltaHTML(key,v,base)
       : `<div class="metric-sub"><span class="tag ${rt==='na'?'na':rt}">${rt==='na'?'no data':rt.replace('warn','needs work')}</span></div>`;
     return `<div class="card"><h3>${name} <span style="color:var(--faint);font-weight:400">p75</span></h3>
       <div class="metric ${rt}" style="color:var(--${rt==='good'?'good':rt==='warn'?'warn':rt==='poor'?'poor':'ink'})">${f(v)}</div>
       ${foot}</div>`;
   }).join('');
-  document.getElementById('sumRange').textContent=`${cur.label} · ${rc.length.toLocaleString()} views`;
-  const byPath={}; rc.forEach(x=>{(byPath[x.path]=byPath[x.path]||[]).push(x)});
-  const rows=Object.entries(byPath).map(([p,list])=>({p,n:list.length,lcp:p75(list.map(x=>x.lcp)),inp:p75(list.map(x=>x.inp)),cls:p75(list.map(x=>x.cls))}))
-    .sort((a,b)=>(b.lcp||0)-(a.lcp||0)).slice(0,7);
+  const views = S ? +S.views : rc.length;
+  document.getElementById('sumRange').textContent=`${cur.label} · ${views.toLocaleString()} views${S?'':' (loading…)'}`;
+  // slowest paths — server-ranked over all rows when available
+  let rows;
+  if(S && S.slow){ rows=S.slow.map(a=>({p:a[0],n:a[1],lcp:a[2],inp:a[3],cls:a[4]})); }
+  else{
+    const byPath={}; rc.forEach(x=>{(byPath[x.path]=byPath[x.path]||[]).push(x)});
+    rows=Object.entries(byPath).map(([p,list])=>({p,n:list.length,lcp:p75(list.map(x=>x.lcp)),inp:p75(list.map(x=>x.inp)),cls:p75(list.map(x=>x.cls))}))
+      .sort((a,b)=>(b.lcp||0)-(a.lcp||0)).slice(0,8);
+  }
   document.getElementById('slowPaths').innerHTML=rows.map(x=>`<tr>
-    <td class="pg">${x.p}</td><td class="cell mono">${x.n}</td>
-    ${cellHTML('lcp',x.lcp,fmtMs)}${cellHTML('inp',x.inp,fmtMs)}${cellHTML('cls',x.cls,fmtCls)}</tr>`).join('')||'<tr><td colspan=5 class="empty">No data in this range</td></tr>';
-  drawTrend(rc,cur); renderAudience(rc);
+    <td class="pg">${x.p}</td><td class="cell mono">${(+x.n).toLocaleString()}</td>
+    ${cellHTML('lcp',x.lcp==null?null:+x.lcp,fmtMs)}${cellHTML('inp',x.inp==null?null:+x.inp,fmtMs)}${cellHTML('cls',x.cls==null?null:+x.cls,fmtCls)}</tr>`).join('')||'<tr><td colspan=5 class="empty">No data in this range</td></tr>';
+  drawTrend(rc,cur,S); renderAudience(rc,S);
 }
 function cellHTML(metric,v,f){const rt=rate(metric,v);return `<td class="cell"><span class="cellval ${rt}">${f(v)}</span></td>`;}
-function drawTrend(rows,cur){
+function drawTrend(rows,cur,S){
   rows=rows||DATA.rum; cur=cur||windowRange();
-  const from=cur.from||(rows.length?+new Date(rows[rows.length-1].created_at):Date.now()-7*DAY), to=cur.to||Date.now();
-  const N=Math.min(30,Math.max(6,Math.ceil((to-from)/DAY))), span=(to-from)/N||1;
-  const buckets=Array.from({length:N},()=>[]);
-  rows.forEach(r=>{const t=+new Date(r.created_at); let i=Math.floor((t-from)/span); if(i<0)i=0; if(i>=N)i=N-1; buckets[i].push(r.lcp);});
-  const data=buckets.map(b=>{const v=p75(b); return v?+(v/1000).toFixed(2):null;});
-  const labels=buckets.map((_,i)=>{const d=new Date(from+span*(i+0.5)); return (to-from)>2*DAY?(d.getMonth()+1)+'/'+d.getDate():d.getHours()+':00';});
+  const to=cur.to||Date.now(), from=cur.from||(Date.now()-7*DAY);
+  let labels, data;
+  const useHourly=(to-from)<=2*DAY;
+  const series = S ? (useHourly ? S.hourly : S.daily) : null;
+  if(series && series.length){
+    // server-computed p75 per bucket, over EVERY row in the window
+    labels=series.map(a=>{const d=new Date(a[0]); return useHourly?(d.getHours()+':00'):((d.getMonth()+1)+'/'+d.getDate());});
+    data=series.map(a=>a[1]==null?null:+(+a[1]/1000).toFixed(2));
+  } else {
+    const N=Math.min(30,Math.max(6,Math.ceil((to-from)/DAY))), span=(to-from)/N||1;
+    const buckets=Array.from({length:N},()=>[]);
+    rows.forEach(r=>{const t=+new Date(r.created_at); let i=Math.floor((t-from)/span); if(i<0)i=0; if(i>=N)i=N-1; buckets[i].push(r.lcp);});
+    data=buckets.map(b=>{const v=p75(b); return v?+(v/1000).toFixed(2):null;});
+    labels=buckets.map((_,i)=>{const d=new Date(from+span*(i+0.5)); return (to-from)>2*DAY?(d.getMonth()+1)+'/'+d.getDate():d.getHours()+':00';});
+  }
   const ctx=document.getElementById('trendChart'); if(charts.trend)charts.trend.destroy();
   charts.trend=new Chart(ctx,{type:'line',data:{labels,datasets:[{data,borderColor:'#4F46E5',backgroundColor:'rgba(79,70,229,.08)',fill:true,tension:.35,pointRadius:0,borderWidth:2,spanGaps:true}]},options:baseOpts('s')});
 }
@@ -826,17 +862,28 @@ function drawPie3d(id,key,entries,pal,legendId){
     lg.innerHTML=entries.map((e,i)=>`<span class="lg"><i style="background:${pal[i%pal.length]}"></i>${e[0]} <b>${Math.round(e[1]/total*100)}%</b></span>`).join('');
   }
 }
-function renderAudience(rows){
-  // windowed rows when a date filter is active; accurate all-time counts otherwise
-  const windowed = rows && RANGE.preset!=='all';
-  const a = windowed ? audienceFromRows(rows) : (DATA.audience||audienceFromRows(DATA.rum));
+function renderAudience(rows,S){
+  // Prefer server aggregates (whole window). Fall back to loaded rows only if the
+  // RPC isn't installed yet — that fallback is truncated at high traffic.
+  let a;
+  if(S && S.by_device){
+    a={ total:+S.views,
+        device:(S.by_device||[]).map(x=>[cap(x[0]),+x[1]]),
+        os:(S.by_os||[]).map(x=>[x[0],+x[1]]),
+        net:(S.by_net||[]).map(x=>[x[0],+x[1]]),
+        ref:(S.by_ref||[]).map(x=>[x[0],+x[1]]) };
+  } else {
+    const windowed = rows && RANGE.preset!=='all';
+    a = windowed ? audienceFromRows(rows) : (DATA.audience||audienceFromRows(DATA.rum));
+  }
   drawPie3d('deviceChart','dev',a.device,DEVPAL,'deviceLegend');
   drawPie3d('osChart','os',a.os,OSPAL,'osLegend');
   drawPie3d('netChart','net',a.net,NETPAL,'netLegend');
   drawPie3d('refChart','ref',a.ref,REFPAL,'refLegend');
   // fill each card's back face with its pivot table
   AUD_DIMS.forEach(d=>{ const p=document.getElementById(d.k+'Pivot'); if(p)p.innerHTML=pivotHTML(d.k); });
-  const el=document.getElementById('audRange'); if(el)el.textContent=(a.total||0).toLocaleString()+(windowed?' sessions in range':' sessions tracked');
+  const el=document.getElementById('audRange');
+  if(el)el.textContent=(a.total||0).toLocaleString()+' sessions in range'+(S?'':' (partial)');
 }
 let audTimer; function refreshAudienceSoon(){clearTimeout(audTimer);audTimer=setTimeout(async()=>{await loadAudience();if(curView==='summary')renderSummary();},5000);}
 let sumTimer; function renderSummarySoon(){clearTimeout(sumTimer);sumTimer=setTimeout(()=>{if(curView==='summary')renderSummary();},1200);}
