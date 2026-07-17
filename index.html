@@ -676,8 +676,11 @@ function latestChecks(){
 /* ===================== SUMMARY (date-windowed + comparison) ================== */
 const DAY=86400000;
 let RANGE={preset:'7d',from:null,to:null};
+// Quantise "now" to the minute so the window (and therefore the stats cache key)
+// is stable between renders — otherwise every realtime tick refetches and reflashes.
+function nowQ(){ return Math.floor(Date.now()/60000)*60000; }
 function windowRange(){
-  const now=Date.now();
+  const now=nowQ();
   if(RANGE.preset==='custom' && RANGE.from){
     const to=RANGE.to?new Date(RANGE.to+'T23:59:59').getTime():now;
     return {from:new Date(RANGE.from+'T00:00:00').getTime(),to,label:RANGE.from+' → '+(RANGE.to||'now')};
@@ -687,7 +690,7 @@ function windowRange(){
   return {from:now-d*DAY,to:now,label:RANGE.preset==='24h'?'last 24 hours':'last '+d+' days'};
 }
 function comparisonRange(cur,mode){
-  const now=Date.now(), len=cur.to-cur.from;
+  const now=nowQ(), len=cur.to-cur.from;
   if(mode==='prev') return {from:cur.from-len,to:cur.from,label:'previous period'};
   if(mode==='avg7') return {from:now-7*DAY,to:now,label:'last 7-day avg'};
   if(mode==='avg30') return {from:now-30*DAY,to:now,label:'last 30-day avg'};
@@ -714,14 +717,35 @@ async function fetchStats(from,to){
     return data;
   }catch(e){ console.warn('dash_stats unavailable — run dash_rpc.sql. Falling back to (truncated) client data.',e.message); return null; }
 }
+let rpcOK=null;   // null = unknown, true = server stats work, false = RPC not installed
 function renderSummary(){
   const cur=windowRange();
   const mode=(document.getElementById('cmpSel')||{}).value||'prev';
   const cmp=comparisonRange(cur,mode);
-  paintSummary(cur,cmp,null,null);                 // instant paint from cached rows
+  // NEVER paint a number we know is truncated — a wrong figure that then silently
+  // corrects itself is worse than an honest "counting…". Show a placeholder while
+  // Postgres does the real maths.
+  // Already have true numbers for this window? Keep showing them — never flash a
+  // placeholder (or a stale wrong figure) over data that is already correct.
+  const cached=statsCache[cur.from+'_'+cur.to];
+  const cachedB=cmp?statsCache[cmp.from+'_'+cmp.to]:null;
+  if(cached) paintSummary(cur,cmp,cached,cachedB);
+  else if(rpcOK!==false) paintLoading(cur);
+  else paintSummary(cur,cmp,null,null);            // RPC missing: client data, clearly labelled partial
   Promise.all([fetchStats(cur.from,cur.to), cmp?fetchStats(cmp.from,cmp.to):Promise.resolve(null)])
-    .then(([s,b])=>{ if(s) paintSummary(cur,cmp,s,b); })   // repaint with true numbers
-    .catch(()=>{});
+    .then(([s,b])=>{
+      if(s){ rpcOK=true; paintSummary(cur,cmp,s,b); }
+      else { rpcOK=false; paintSummary(cur,cmp,null,null); }
+    })
+    .catch(()=>{ rpcOK=false; paintSummary(cur,cmp,null,null); });
+}
+function paintLoading(cur){
+  const tiles=[['LCP','lcp'],['INP','inp'],['CLS','cls'],['FCP','fcp'],['TTFB','ttfb']];
+  document.getElementById('sumTiles').innerHTML=tiles.map(([name])=>
+    `<div class="card"><h3>${name} <span style="color:var(--faint);font-weight:400">p75</span></h3>
+     <div class="metric" style="color:var(--line)">—</div>
+     <div class="metric-sub" style="color:var(--faint)">counting…</div></div>`).join('');
+  document.getElementById('sumRange').textContent=`${cur.label} · counting…`;
 }
 function paintSummary(cur,cmp,S,B){
   const rc=rowsIn(cur.from,cur.to);
@@ -738,7 +762,10 @@ function paintSummary(cur,cmp,S,B){
       ${foot}</div>`;
   }).join('');
   const views = S ? +S.views : rc.length;
-  document.getElementById('sumRange').textContent=`${cur.label} · ${views.toLocaleString()} views${S?'':' (loading…)'}`;
+  // If S is missing the RPC isn't installed and this count is a truncated slice —
+  // say so plainly rather than dressing it up as the real figure.
+  document.getElementById('sumRange').textContent=
+    `${cur.label} · ${views.toLocaleString()} views${S?'':' — PARTIAL, run dash_rpc.sql'}`;
   // slowest paths — server-ranked over all rows when available
   let rows;
   if(S && S.slow){ rows=S.slow.map(a=>({p:a[0],n:a[1],lcp:a[2],inp:a[3],cls:a[4]})); }
