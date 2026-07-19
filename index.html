@@ -108,6 +108,22 @@ a{color:inherit}
 .piv td{padding:8px 10px;border-bottom:1px solid var(--line2)}
 .piv tr.avg td{background:#FAFBFC;font-weight:600}
 .slidehint{display:none;text-align:center;color:var(--faint);font-size:11px;margin-top:8px;letter-spacing:.04em}
+/* Web Score gauges */
+.gauge{--v:0;--c:var(--good);width:118px;height:118px;border-radius:50%;flex-shrink:0;
+  background:conic-gradient(var(--c) calc(var(--v)*1%), var(--line2) 0);
+  display:flex;align-items:center;justify-content:center;position:relative}
+.gauge::after{content:"";position:absolute;inset:9px;border-radius:50%;background:var(--surface);z-index:0}
+.gauge b{position:relative;z-index:1;font-family:'JetBrains Mono';font-size:30px;font-weight:600}
+.subscore{display:flex;align-items:center;gap:9px;margin:8px 0}
+.subscore .lbl{width:112px;font-size:12px;color:var(--muted);flex-shrink:0}
+.subscore .bar{flex:1;height:7px;border-radius:4px;background:var(--line2);overflow:hidden}
+.subscore .bar i{display:block;height:100%;border-radius:4px}
+.subscore .n{width:32px;text-align:right;font-family:'JetBrains Mono';font-size:12px;font-weight:600}
+.wsmetrics{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-top:14px;font-size:12px}
+.wsmetrics .row{display:flex;justify-content:space-between;border-bottom:1px solid var(--line2);padding:5px 0}
+.wsmetrics .row span:last-child{font-family:'JetBrains Mono';font-weight:600}
+.gd-good{color:var(--good)}.gd-warn{color:var(--warn)}.gd-poor{color:var(--poor)}
+.bg-good{background:var(--good)}.bg-warn{background:var(--warn)}.bg-poor{background:var(--poor)}
 .metric{font-family:'JetBrains Mono';font-size:27px;font-weight:600;letter-spacing:-.02em;margin-top:9px;line-height:1}
 .metric small{font-size:13px;color:var(--faint);font-weight:400;margin-left:3px}
 .metric-sub{font-size:11.5px;color:var(--faint);margin-top:7px;display:flex;align-items:center;gap:6px}
@@ -376,6 +392,24 @@ a{color:inherit}
         <p style="color:var(--faint);font-size:11.5px;margin-top:12px">Each page appears twice — <b>Mobile</b> and <b>Desktop</b>. Every metric is a 10-bar sparkline where <b>each bar = one day</b> (last 10 days), colored by that day's rating; the number below is the p75 across the window. Vitals are your real visitors (RUM), so they populate for pages on your store.</p>
       </section>
 
+      <!-- WEB SCORE -->
+      <section class="view" data-view="webscore">
+        <div class="toolbar">
+          <input id="wsUrl" placeholder="https://any-website.com" style="flex:2;min-width:220px">
+          <input id="wsUrl2" placeholder="(optional) second URL to compare" style="flex:2;min-width:220px">
+          <button class="btn pri" id="wsRun" onclick="runWebScore()">🎯 Score</button>
+        </div>
+        <div id="wsResult" class="grid g2" style="align-items:start"></div>
+        <div class="section-h"><h2>Saved sites</h2><span id="wsSavedNote">score history · click to re-score</span></div>
+        <div class="wv"><table>
+          <thead><tr><th>Site</th><th class="m">Overall</th><th class="m">Perf</th><th class="m">SEO</th><th class="m">A11y</th><th class="m">Best</th><th class="m">Checked</th><th class="m"></th></tr></thead>
+          <tbody id="wsSaved"></tbody>
+        </table></div>
+        <p style="color:var(--faint);font-size:11.5px;margin-top:12px">
+          Scores any URL server-side (Vercel) — <b>no PageSpeed API key</b>. Grades server-visible signals: response speed (TTFB), page weight, render-blocking resources, compression, SEO &amp; accessibility. It can't paint LCP/CLS/INP (that needs a real browser — your own store's are on the <b>Web Vitals</b> tab). Enter a second URL to compare two sites side by side.
+        </p>
+      </section>
+
       <!-- TASK CATEGORY (single reused view) -->
       <section class="view" data-view="task">
         <div class="toolbar">
@@ -493,7 +527,7 @@ const SAMPLE_ITEMS=[
 ].map((r,i)=>({id:'i'+i,category:r[0],item:r[1],check_type:r[2],auto_key:r[3],sort:i}));
 
 /* ===================== STATE ================== */
-let DATA={ rum:[], psi:[], monitors:[], items:[], checks:[], purchases:[] };
+let DATA={ rum:[], psi:[], monitors:[], items:[], checks:[], purchases:[], webscores:[] };
 let curView='summary', curCat=null, charts={};
 
 /* ===================== NAV ================== */
@@ -506,6 +540,7 @@ function buildNav(){
     ${navBtn('live','Live Data','⚡')}
     ${navBtn('purchases','Purchases','🛒')}
     ${navBtn('monitors','Monitors','🔗')}
+    ${navBtn('webscore','Web Score','🎯')}
     <h4>QA Tasks</h4>`;
   TASK_CATS.forEach(c=> h+=navBtn('cat:'+c, c.replace(' Testing',''), CAT_ICON[c]||'•', true));
   el.innerHTML=h;
@@ -524,10 +559,78 @@ function toggleSide(force){
   document.getElementById('side').classList.toggle('open', open);
   document.getElementById('backdrop').classList.toggle('on', open);
 }
-const TITLES={summary:['Summary','Real-user performance across the store'],webvitals:['Web Vitals','Live from your visitors · PageSpeed as cross-check'],live:['Live Data','Raw events streaming from real visitors'],purchases:['Purchases','Real orders · what each buyer actually experienced'],monitors:['Monitors','Per-page Web Vitals by device · 10-day daily sparklines']};
+const TITLES={summary:['Summary','Real-user performance across the store'],webvitals:['Web Vitals','Live from your visitors · PageSpeed as cross-check'],live:['Live Data','Raw events streaming from real visitors'],purchases:['Purchases','Real orders · what each buyer actually experienced'],monitors:['Monitors','Per-page Web Vitals by device · 10-day daily sparklines'],webscore:['Web Score','Score & compare any URL — no PageSpeed API needed']};
 function setTitle(t,s){document.getElementById('vtitle').textContent=t;document.getElementById('vsub').textContent=s;}
 function showView(v){document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on', s.dataset.view===v));}
-function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='purchases')renderPurchases(); if(v==='monitors')renderMonitors(); }
+function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='purchases')renderPurchases(); if(v==='monitors')renderMonitors(); if(v==='webscore')renderWebScore(); }
+
+/* ===================== WEB SCORE (scores any URL via /api/score, no PSI API) === */
+const scoreColor=s=>s==null?'na':(s>=90?'good':s>=50?'warn':'poor');
+async function scoreUrl(u){
+  const r=await fetch('/api/score?url='+encodeURIComponent(u));
+  const j=await r.json().catch(()=>({error:'scoring endpoint unreachable'}));
+  if(!r.ok && !j.error) throw new Error('HTTP '+r.status);
+  if(j.error) throw new Error(j.error);
+  return j;
+}
+async function runWebScore(){
+  const u1=document.getElementById('wsUrl').value.trim(), u2=document.getElementById('wsUrl2').value.trim();
+  if(!u1){alert('Enter a URL to score');return;}
+  const btn=document.getElementById('wsRun'), orig=btn.textContent; btn.textContent='⏳ scoring…'; btn.disabled=true;
+  const box=document.getElementById('wsResult');
+  box.innerHTML='<div class="card"><div class="empty">Scoring… fetching and analyzing the page(s) server-side.</div></div>';
+  try{
+    const targets=[u1,...(u2?[u2]:[])];
+    const results=await Promise.all(targets.map(t=>scoreUrl(t).catch(e=>({error:e.message,url:t}))));
+    box.innerHTML=results.map(scoreCardHTML).join('');
+    if(LIVE&&sb){
+      const rows=results.filter(r=>!r.error).map(r=>({url:r.url,overall:r.scores.overall,performance:r.scores.performance,seo:r.scores.seo,accessibility:r.scores.accessibility,best_practices:r.scores.bestPractices,metrics:r.metrics,saved:true}));
+      if(rows.length){ await sb.from('web_scores').insert(rows); loadSavedScores(); }
+    }
+  }catch(e){ box.innerHTML='<div class="card"><div class="empty">Could not score: '+e.message+'</div></div>'; }
+  btn.textContent=orig; btn.disabled=false;
+}
+function scoreCardHTML(r){
+  if(r.error) return `<div class="card"><h3>${(r.url||'URL')}</h3><div class="empty">Couldn't score: ${r.error}<br><span style="font-size:11px">(the /api/score endpoint runs on Vercel — it won't work on a local static server)</span></div></div>`;
+  const s=r.scores, m=r.metrics, g=scoreColor(s.overall);
+  const sub=(lbl,v)=>{const c=scoreColor(v);return `<div class="subscore"><span class="lbl">${lbl}</span><span class="bar"><i class="bg-${c}" style="width:${v}%"></i></span><span class="n gd-${c}">${v}</span></div>`;};
+  const row=(k,v)=>`<div class="row"><span>${k}</span><span>${v}</span></div>`;
+  let host=r.url; try{host=new URL(r.url).hostname;}catch(e){}
+  return `<div class="card">
+    <div style="display:flex;gap:16px;align-items:center">
+      <div class="gauge" style="--v:${s.overall};--c:var(--${g})"><b class="gd-${g}">${s.overall}</b></div>
+      <div style="min-width:0"><div class="pg" style="font-size:14px">${host}</div>
+        <div style="font-size:11.5px;color:var(--faint);word-break:break-all">${r.url}</div>
+        <div style="font-size:11px;color:var(--faint);margin-top:4px">overall web score</div></div>
+    </div>
+    <div style="margin-top:14px">
+      ${sub('Performance',s.performance)}${sub('SEO',s.seo)}${sub('Accessibility',s.accessibility)}${sub('Best practices',s.bestPractices)}
+    </div>
+    <div class="wsmetrics">
+      ${row('Server response',m.ttfb_ms+'ms')}${row('Full load',m.load_ms+'ms')}
+      ${row('Page weight',(m.weight_kb||0).toLocaleString()+' KB')}${row('HTML size',m.html_kb+' KB')}
+      ${row('Render-blocking',m.render_blocking)}${row('3rd-party scripts',m.third_party_scripts)}
+      ${row('Compression',m.compression)}${row('HTTPS',m.https?'✓':'✗')}
+      ${row('Images w/ alt',m.images_with_alt+' / '+m.images)}${row('Schema (JSON-LD)',m.schema?'✓':'✗')}
+    </div></div>`;
+}
+async function loadSavedScores(){
+  if(!(LIVE&&sb)) return;
+  try{ const {data}=await sb.from('web_scores').select('*').order('created_at',{ascending:false}).limit(300); DATA.webscores=data||[]; if(curView==='webscore')renderWebScore(); }catch(e){}
+}
+function renderWebScore(){
+  const all=DATA.webscores||[], seen={}, latest=[];
+  all.forEach(r=>{ if(!seen[r.url]){seen[r.url]=1;latest.push(r);} });
+  const body=document.getElementById('wsSaved');
+  const cell=v=>{const c=scoreColor(v);return `<td class="cell"><span class="cellval gd-${c}">${v==null?'—':Math.round(v)}</span></td>`;};
+  body.innerHTML=latest.length?latest.map(r=>{let h=r.url;try{h=new URL(r.url).hostname;}catch(e){}return `<tr>
+    <td><div class="pg">${h}<small>${r.url}</small></div></td>
+    ${cell(r.overall)}${cell(r.performance)}${cell(r.seo)}${cell(r.accessibility)}${cell(r.best_practices)}
+    <td class="cell mono" style="color:var(--faint)">${timeAgo(r.created_at)}</td>
+    <td class="cell"><button class="mini" onclick="rescore('${r.url}')">re-score</button></td></tr>`;}).join('')
+    :'<tr><td colspan=8 class="empty">No sites scored yet — enter a URL above and hit Score.</td></tr>';
+}
+function rescore(u){ document.getElementById('wsUrl').value=u; document.getElementById('wsUrl2').value=''; runWebScore(); }
 
 /* ===================== PURCHASES ================== */
 const money=v=>(v==null?'—':'₹'+Math.round(v).toLocaleString('en-IN'));
@@ -628,6 +731,7 @@ async function loadAll(manual){
       document.getElementById('refreshBtn').textContent='↻ Refresh';
       // BACKGROUND 1: accurate all-time audience counts, then refresh.
       loadAudience().then(()=>{ if(curView==='summary')renderSummary(); }).catch(()=>{});
+      loadSavedScores();
       // BACKGROUND 2: pull the rest of the history in parallel, dedupe, re-render.
       if((DATA.rum.length||0)>=1000){
         fetchRemainingRum(12000).then(more=>{
