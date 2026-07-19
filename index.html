@@ -83,6 +83,10 @@ a{color:inherit}
 .delta{font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:3px;margin-top:6px}
 .delta.up{color:var(--poor)}.delta.down{color:var(--good)}.delta.flat{color:var(--faint)}
 .delta .base{color:var(--faint);font-weight:400;margin-left:3px}
+/* interactive trend controls */
+.trendbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.segs.sm button{padding:5px 11px;font-size:12px}
+.gransel{margin-left:auto;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-family:inherit;font-size:12px;background:var(--surface);color:var(--muted)}
 /* audience card header + pivot button + pivot table */
 .cardhd{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-shrink:0}
 .pivbtn{border:1px solid var(--line);background:var(--surface);color:var(--muted);font-size:10.5px;font-weight:600;padding:3px 8px;border-radius:6px;white-space:nowrap}
@@ -95,9 +99,14 @@ a{color:inherit}
 .face.back{transform:rotateY(180deg)}
 .pivwrap{flex:1;overflow:auto;margin-top:8px}
 /* ---- 3D pie: perspective tilt + drop shadow gives real depth ---- */
-.pie3d{position:relative;flex:1;min-height:0;margin-top:4px;perspective:800px;display:flex;align-items:center;justify-content:center}
-.pie3d canvas{transform:rotateX(56deg);filter:drop-shadow(0 14px 7px rgba(16,23,40,.38)) drop-shadow(0 5px 2px rgba(16,23,40,.22));transition:transform .5s ease}
-.flipcard:hover .pie3d canvas{transform:rotateX(46deg)}
+.pie3d{position:relative;flex:1;min-height:0;margin-top:4px;perspective:850px;display:flex;align-items:center;justify-content:center}
+/* soft neumorphic glow behind the disc */
+.pie3d::before{content:"";position:absolute;width:64%;height:64%;border-radius:50%;
+  background:radial-gradient(circle, rgba(79,70,229,.16), transparent 68%);filter:blur(16px);z-index:0}
+.pie3d canvas{position:relative;z-index:1;transform:rotateX(52deg);
+  filter:drop-shadow(0 16px 12px rgba(16,23,40,.22)) drop-shadow(0 4px 3px rgba(16,23,40,.12));
+  transition:transform .55s cubic-bezier(.34,1.2,.4,1)}
+.flipcard:hover .pie3d canvas{transform:rotateX(42deg) scale(1.03)}
 .legend{display:flex;flex-wrap:wrap;gap:5px 10px;justify-content:center;margin-top:10px;font-size:10.5px;color:var(--muted);flex-shrink:0}
 .legend .lg{display:inline-flex;align-items:center;gap:4px}
 .legend i{width:8px;height:8px;border-radius:2px;display:inline-block;flex-shrink:0}
@@ -292,7 +301,20 @@ a{color:inherit}
         </div>
         <div class="grid g5" id="sumTiles"></div>
         <div class="section-h"><h2>Real-user trend</h2><span id="sumRange">last 7 days</span></div>
-        <div class="card"><h3>LCP p75 over time</h3><div class="chartbox"><canvas id="trendChart"></canvas></div></div>
+        <div class="card">
+          <div class="trendbar">
+            <div class="segs sm" id="trendMetric">
+              <button data-m="lcp" class="on">LCP</button><button data-m="inp">INP</button><button data-m="cls">CLS</button><button data-m="fcp">FCP</button><button data-m="ttfb">TTFB</button>
+            </div>
+            <select id="trendGran" class="gransel" onchange="onTrendGran()">
+              <option value="auto">granularity: auto</option>
+              <option value="minute">by minute</option>
+              <option value="hour">by hour</option>
+              <option value="day">by day</option>
+            </select>
+          </div>
+          <div class="chartbox" style="height:230px"><canvas id="trendChart"></canvas></div>
+        </div>
         <div class="section-h"><h2>Audience &amp; network</h2><span id="audRange"></span></div>
         <div class="grid g4 audience" id="audienceGrid"></div>
         <div class="slidehint" id="slidehint">‹ swipe charts · tap ▦ Table to flip ›</div>
@@ -881,28 +903,86 @@ function paintSummary(cur,cmp,S,B){
   document.getElementById('slowPaths').innerHTML=rows.map(x=>`<tr>
     <td class="pg">${x.p}</td><td class="cell mono">${(+x.n).toLocaleString()}</td>
     ${cellHTML('lcp',x.lcp==null?null:+x.lcp,fmtMs)}${cellHTML('inp',x.inp==null?null:+x.inp,fmtMs)}${cellHTML('cls',x.cls==null?null:+x.cls,fmtCls)}</tr>`).join('')||'<tr><td colspan=5 class="empty">No data in this range</td></tr>';
-  drawTrend(rc,cur,S); renderAudience(rc,S);
+  updateTrend(cur,cmp); renderAudience(rc,S);
 }
 function cellHTML(metric,v,f){const rt=rate(metric,v);return `<td class="cell"><span class="cellval ${rt}">${f(v)}</span></td>`;}
-function drawTrend(rows,cur,S){
-  rows=rows||DATA.rum; cur=cur||windowRange();
-  const to=cur.to||Date.now(), from=cur.from||(Date.now()-7*DAY);
-  let labels, data;
-  const useHourly=(to-from)<=2*DAY;
-  const series = S ? (useHourly ? S.hourly : S.daily) : null;
-  if(series && series.length){
-    // server-computed p75 per bucket, over EVERY row in the window
-    labels=series.map(a=>{const d=new Date(a[0]); return useHourly?(d.getHours()+':00'):((d.getMonth()+1)+'/'+d.getDate());});
-    data=series.map(a=>a[1]==null?null:+(+a[1]/1000).toFixed(2));
-  } else {
-    const N=Math.min(30,Math.max(6,Math.ceil((to-from)/DAY))), span=(to-from)/N||1;
-    const buckets=Array.from({length:N},()=>[]);
-    rows.forEach(r=>{const t=+new Date(r.created_at); let i=Math.floor((t-from)/span); if(i<0)i=0; if(i>=N)i=N-1; buckets[i].push(r.lcp);});
-    data=buckets.map(b=>{const v=p75(b); return v?+(v/1000).toFixed(2):null;});
-    labels=buckets.map((_,i)=>{const d=new Date(from+span*(i+0.5)); return (to-from)>2*DAY?(d.getMonth()+1)+'/'+d.getDate():d.getHours()+':00';});
+/* ---- interactive trend: metric switch · granularity · hover tooltip · dashed comparison ---- */
+let trendMetric='lcp', trendBucket='auto';
+const METRIC_META={
+  lcp: {label:'LCP', color:'#4F46E5', div:1000, unit:'s', fmt:v=>fmtMs(v)},
+  inp: {label:'INP', color:'#7C3AED', div:1,    unit:'ms',fmt:v=>fmtMs(v)},
+  cls: {label:'CLS', color:'#0EA5A5', div:1,    unit:'', fmt:v=>fmtCls(v)},
+  fcp: {label:'FCP', color:'#2563EB', div:1000, unit:'s', fmt:v=>fmtMs(v)},
+  ttfb:{label:'TTFB',color:'#059669', div:1000, unit:'s', fmt:v=>fmtMs(v)},
+};
+function autoBucket(from,to){ const h=(to-from)/3600000; if(h<=12)return 'minute'; if(h<=96)return 'hour'; return 'day'; }
+async function fetchTrend(from,to,bucket,metric){
+  if(!(LIVE&&sb)) return null;
+  try{ const {data,error}=await sb.rpc('dash_trend',{p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString(),p_bucket:bucket,p_metric:metric}); if(error)throw error; return data; }
+  catch(e){ console.warn('dash_trend unavailable — run dash_trend.sql',e.message); return null; }
+}
+let trendToken=0;
+async function updateTrend(cur,cmp){
+  const my=++trendToken;
+  const bucket = trendBucket==='auto'?autoBucket(cur.from,cur.to):trendBucket;
+  const [cs,ps]=await Promise.all([
+    fetchTrend(cur.from,cur.to,bucket,trendMetric),
+    cmp?fetchTrend(cmp.from,cmp.to,bucket,trendMetric):Promise.resolve(null)
+  ]);
+  if(my!==trendToken) return;                 // a newer request superseded this one
+  drawTrend2(cur,cmp,bucket,cs,ps);
+}
+function drawTrend2(cur,cmp,bucket,cs,ps){
+  const M=METRIC_META[trendMetric];
+  const ctx=document.getElementById('trendChart'); if(!ctx)return;
+  const fmtLabel=(ts)=>{const d=new Date(ts); return bucket==='day'?((d.getMonth()+1)+'/'+d.getDate()):bucket==='minute'?(d.getHours()+':'+String(d.getMinutes()).padStart(2,'0')):(d.getMonth()+1)+'/'+d.getDate()+' '+d.getHours()+'h';};
+  let labels, cur_d, cmp_d, counts;
+  if(cs && cs.length){
+    labels=cs.map(a=>fmtLabel(a[0]));
+    cur_d=cs.map(a=>a[1]==null?null:+(+a[1]/M.div).toFixed(M.div>1?2:0));
+    counts=cs.map(a=>a[2]);
+    cmp_d = (cmp&&ps&&ps.length) ? cs.map((_,i)=>{const p=ps[i]; return p&&p[1]!=null?+(+p[1]/M.div).toFixed(M.div>1?2:0):null;}) : null;
+  }else{
+    // fallback: client rows (truncated) — clearly a degraded path
+    const rows=rowsIn(cur.from,cur.to), N=24, span=(cur.to-cur.from)/N||1, b=Array.from({length:N},()=>[]);
+    rows.forEach(r=>{let i=Math.floor((+new Date(r.created_at)-cur.from)/span); if(i<0)i=0;if(i>=N)i=N-1; if(r[trendMetric]!=null)b[i].push(r[trendMetric]);});
+    labels=b.map((_,i)=>fmtLabel(cur.from+span*(i+0.5))); cur_d=b.map(x=>{const v=p75(x);return v==null?null:+(v/M.div).toFixed(M.div>1?2:0);}); counts=b.map(x=>x.length); cmp_d=null;
   }
-  const ctx=document.getElementById('trendChart'); if(charts.trend)charts.trend.destroy();
-  charts.trend=new Chart(ctx,{type:'line',data:{labels,datasets:[{data,borderColor:'#4F46E5',backgroundColor:'rgba(79,70,229,.08)',fill:true,tension:.35,pointRadius:0,borderWidth:2,spanGaps:true}]},options:baseOpts('s')});
+  const g=ctx.getContext('2d'); const grad=g.createLinearGradient(0,0,0,230);
+  grad.addColorStop(0, M.color+'44'); grad.addColorStop(1, M.color+'05');
+  const ds=[{label:M.label,data:cur_d,borderColor:M.color,backgroundColor:grad,fill:true,tension:.4,pointRadius:0,pointHoverRadius:5,pointHoverBackgroundColor:M.color,borderWidth:2.5,spanGaps:true,_counts:counts}];
+  if(cmp_d) ds.push({label:cmp.label||'previous',data:cmp_d,borderColor:M.color+'99',borderDash:[5,4],backgroundColor:'transparent',fill:false,tension:.4,pointRadius:0,pointHoverRadius:4,borderWidth:1.6,spanGaps:true});
+  if(charts.trend)charts.trend.destroy();
+  charts.trend=new Chart(ctx,{type:'line',data:{labels,datasets:ds},options:{
+    maintainAspectRatio:false,
+    interaction:{intersect:false,mode:'index'},
+    plugins:{legend:{display:!!cmp_d,labels:{boxWidth:10,font:{size:10},color:'#616B7C',usePointStyle:true}},
+      tooltip:{backgroundColor:'#0E1728',padding:11,cornerRadius:9,titleFont:{size:11},bodyFont:{size:12,weight:'600'},displayColors:false,
+        callbacks:{
+          title:(items)=>items.length?labels[items[0].dataIndex]:'',
+          label:(item)=>{const raw=item.raw; if(raw==null)return M.label+': no data';
+            const real=raw*M.div; const txt=M.fmt(real);
+            if(item.datasetIndex===0){const n=counts[item.dataIndex]; return `${M.label} p75: ${txt}` + (n!=null?`  ·  ${(+n).toLocaleString()} views`:'');}
+            return `${M.label} (prev): ${txt}`;
+          }
+        }}},
+    scales:{x:{grid:{display:false},ticks:{font:{size:9},color:'#9AA3B2',maxRotation:0,autoSkip:true,maxTicksLimit:9}},
+            y:{grid:{color:'#F0F1F4'},ticks:{font:{size:10},color:'#9AA3B2',callback:v=>(Math.round(v*100)/100)+(M.unit||'')}}}
+  }});
+  const h3=document.querySelector('[data-view="summary"] .card h3'); // (trend card has no h3 now — controls instead)
+}
+function initTrendControls(){
+  document.querySelectorAll('#trendMetric button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('#trendMetric button').forEach(x=>x.classList.toggle('on',x===b));
+    trendMetric=b.dataset.m;
+    const cur=windowRange(), cmp=comparisonRange(cur,(document.getElementById('cmpSel')||{}).value||'prev');
+    updateTrend(cur,cmp);
+  });
+}
+function onTrendGran(){
+  trendBucket=document.getElementById('trendGran').value;
+  const cur=windowRange(), cmp=comparisonRange(cur,(document.getElementById('cmpSel')||{}).value||'prev');
+  updateTrend(cur,cmp);
 }
 function initRangeBar(){
   document.querySelectorAll('#rangeSegs button').forEach(b=>b.onclick=()=>{
@@ -1273,7 +1353,7 @@ function saveConfig(){
 }
 
 /* ===================== BOOT ================== */
-buildNav();buildAudienceCards();initRangeBar();initSB();loadAll().then(subscribe);
+buildNav();buildAudienceCards();initRangeBar();initTrendControls();initSB();loadAll().then(subscribe);
 </script>
 </body>
 </html>
