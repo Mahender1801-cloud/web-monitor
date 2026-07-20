@@ -722,55 +722,42 @@ function renderPurchases(){
   document.getElementById('buyNote').textContent=`${buys.length} order${buys.length>1?'s':''} · ${buys.filter(p=>p.ga_client_id&&byClient[p.ga_client_id]).length} matched to their browsing data`;
 }
 
-/* ===================== DATA LOAD ================== */
-// Fetch older history pages IN PARALLEL (PostgREST caps one request at 1000 rows).
-async function fetchRemainingRum(maxRows){
-  const page=1000, reqs=[];
-  for(let off=page; off<maxRows; off+=page){
-    reqs.push(sb.from('rum_events').select('*').order('created_at',{ascending:false}).range(off,off+page-1).then(r=>r.data||[]).catch(()=>[]));
-  }
-  return (await Promise.all(reqs)).flat();
-}
+/* ===================== DATA LOAD ==================
+   DB-LOAD BUDGET — read before adding queries here.
+   This dashboard sits on a shared/free Postgres that ALSO receives ~12k visitor
+   beacon INSERTs a day. Earlier versions fired ~35 heavy queries per page load
+   (20 count=exact scans + 11 deep-offset page fetches), which saturated the
+   database: inserts climbed to 21s and visitor data was at risk of being lost.
+   Rule: aggregate SERVER-side (dash_stats / dash_trend) and pull raw rows ONCE.
+   Never add a count=exact or a deep .range() offset on rum_events. */
 async function loadAll(manual){
   document.getElementById('refreshBtn').textContent='↻ …';
   if(LIVE && sb){
     try{
-      // FAST FIRST PAINT: first page + small tables in parallel, render immediately.
+      // ONE page of recent rows (for the Live Data table) + the small tables.
+      // Everything aggregate comes from the RPCs, not from pulling rows.
       const [rum1,psi,mon,items,checks,buys]=await Promise.all([
-        sb.from('rum_events').select('*').order('created_at',{ascending:false}).range(0,999),
-        sb.from('psi_results').select('*').order('created_at',{ascending:false}).limit(200),
+        sb.from('rum_events').select('*').order('created_at',{ascending:false}).range(0,499),
+        sb.from('psi_results').select('*').order('created_at',{ascending:false}).limit(100),
         sb.from('monitors').select('*').order('created_at'),
         sb.from('task_items').select('*').order('sort'),
-        sb.from('task_checks').select('*').order('created_at',{ascending:false}).limit(600),
-        sb.from('purchases').select('*').order('created_at',{ascending:false}).limit(500),
+        sb.from('task_checks').select('*').order('created_at',{ascending:false}).limit(400),
+        sb.from('purchases').select('*').order('created_at',{ascending:false}).limit(200),
       ]);
       DATA.rum=rum1.data||[]; DATA.psi=psi.data||[]; DATA.monitors=mon.data||[]; DATA.items=items.data||[]; DATA.checks=checks.data||[]; DATA.purchases=buys.data||[];
       document.getElementById('banner').style.display='none';
       document.getElementById('foot').textContent='Connected · '+new URL(CONFIG.url).hostname;
       setPulse(true,'live');
-      // FIRST PAINT immediately (windowed audience comes from the loaded rows).
       updateDots(); renderView(curView==='task'?null:curView); if(curView==='task')renderTask();
       document.getElementById('refreshBtn').textContent='↻ Refresh';
-      // BACKGROUND 1: accurate all-time audience counts, then refresh.
-      loadAudience().then(()=>{ if(curView==='summary')renderSummary(); }).catch(()=>{});
       loadSavedScores();
-      // BACKGROUND 2: pull the rest of the history in parallel, dedupe, re-render.
-      if((DATA.rum.length||0)>=1000){
-        fetchRemainingRum(12000).then(more=>{
-          if(more&&more.length){
-            const seen=new Set(DATA.rum.map(r=>r.id));
-            DATA.rum=DATA.rum.concat(more.filter(r=>!seen.has(r.id)));
-            if(curView==='summary')renderSummary(); else if(curView==='monitors')renderMonitors(); else renderView(curView);
-          }
-        }).catch(()=>{});
-      }
       return;
     }catch(e){ console.error(e); alert('Load failed: '+e.message); }
   } else {
     DATA.rum=makeSampleRUM(1600); DATA.psi=makeSamplePSI(); DATA.monitors=SAMPLE_MON; DATA.items=SAMPLE_ITEMS; DATA.checks=makeSampleChecks();
     setPulse(false,'sample');
+    DATA.audience=audienceFromRows(DATA.rum);
   }
-  await loadAudience();
   updateDots(); renderView(curView==='task'?null:curView); if(curView==='task')renderTask();
   document.getElementById('refreshBtn').textContent='↻ Refresh';
 }
@@ -1004,32 +991,10 @@ const NETPAL=['#129C6E','#4CB98D','#86D0B0','#BFE7D3','#E6F6EF'];
 const REFPAL=['#4F46E5','#E0961A','#E23D4B','#129C6E','#8B84F5','#C7C9F5'];
 const DEVPAL=['#4F46E5','#C7C9F5'];
 function cap(s){return s?s[0].toUpperCase()+s.slice(1):s;}
-async function loadAudience(){
-  if(LIVE && sb){
-    try{
-      const base=()=>sb.from('rum_events').select('*',{count:'exact',head:true});
-      const c=q=>q.then(r=>r.count||0);
-      const DEV=['mobile','desktop'], OS=['Windows','Android','iOS','macOS','Linux','Other'], NET=['4g','3g','2g','slow-2g','unknown'];
-      const [total,devC,osC,netC]=await Promise.all([
-        c(base()),
-        Promise.all(DEV.map(v=>c(base().eq('device',v)))),
-        Promise.all(OS.map(v=>c(base().eq('os',v)))),
-        Promise.all(NET.map(v=>c(base().eq('connection',v)))),
-      ]);
-      const [insta,fb,goog,intern,dNull,dEmpty]=await Promise.all([
-        c(base().ilike('referrer','%instagram%')), c(base().ilike('referrer','%facebook%')),
-        c(base().ilike('referrer','%google%')), c(base().ilike('referrer','%hashtageyewear%')),
-        c(base().is('referrer',null)), c(base().eq('referrer','')),
-      ]);
-      const direct=dNull+dEmpty, other=Math.max(0,total-(insta+fb+goog+intern+direct));
-      DATA.audience={ total,
-        device:DEV.map((k,i)=>[cap(k),devC[i]]).filter(x=>x[1]>0),
-        os:OS.map((k,i)=>[k,osC[i]]).filter(x=>x[1]>0),
-        net:NET.map((k,i)=>[k,netC[i]]).filter(x=>x[1]>0),
-        ref:[['Direct',direct],['Instagram',insta],['Facebook',fb],['Google',goog],['Internal',intern],['Other',other]].filter(x=>x[1]>0) };
-    }catch(e){ console.error('audience',e); DATA.audience=audienceFromRows(DATA.rum); }
-  } else { DATA.audience=audienceFromRows(DATA.rum); }
-}
+/* REMOVED: loadAudience() used to fire ~20 `count=exact` queries, each a full scan
+   of rum_events. With ~95k rows plus live beacon inserts that saturated the database
+   (inserts hit 21s). dash_stats already returns by_device / by_os / by_net / by_ref
+   for the selected window in ONE query, so those scans were pure waste. */
 function audienceFromRows(rows){
   const g=f=>{const m={};rows.forEach(r=>{const k=f(r)||'Other';m[k]=(m[k]||0)+1});return Object.entries(m).sort((a,b)=>b[1]-a[1]);};
   const refCat=r=>{const x=(r.referrer||'').toLowerCase();if(!x)return'Direct';if(x.includes('instagram'))return'Instagram';if(x.includes('facebook'))return'Facebook';if(x.includes('google'))return'Google';if(x.includes('hashtageyewear'))return'Internal';return'Other';};
@@ -1096,7 +1061,9 @@ function renderAudience(rows,S){
   const el=document.getElementById('audRange');
   if(el)el.textContent=(a.total||0).toLocaleString()+' sessions in range'+(S?'':' (partial)');
 }
-let audTimer; function refreshAudienceSoon(){clearTimeout(audTimer);audTimer=setTimeout(async()=>{await loadAudience();if(curView==='summary')renderSummary();},5000);}
+// Realtime inserts must NOT trigger a re-aggregation storm. renderSummarySoon()
+// already refreshes the view (debounced) using the cached dash_stats result.
+function refreshAudienceSoon(){ /* intentionally a no-op — see DB-LOAD BUDGET above */ }
 let sumTimer; function renderSummarySoon(){clearTimeout(sumTimer);sumTimer=setTimeout(()=>{if(curView==='summary')renderSummary();},1200);}
 /* ---- Pivot report: a dimension (device/os/net/ref) broken down by page group ---- */
 function pageGroup(p){p=p||'/';if(p==='/'||p==='')return 'Homepage';if(p.startsWith('/collections'))return 'Collections';if(p.startsWith('/products'))return 'Products';if(p.startsWith('/cart'))return 'Cart';if(p.startsWith('/pages'))return 'Pages';if(p.startsWith('/apps'))return 'Apps';return 'Other';}
