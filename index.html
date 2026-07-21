@@ -137,6 +137,8 @@ a{color:inherit}
 .wsmetrics{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-top:14px;font-size:12px}
 .wsmetrics .row{display:flex;justify-content:space-between;border-bottom:1px solid var(--line2);padding:5px 0}
 .wsmetrics .row span:last-child{font-family:'JetBrains Mono';font-weight:600}
+.savebtn{margin-top:9px}
+.savebtn.saved{border-color:var(--good);color:var(--good);background:var(--good-bg)}
 .gd-good{color:var(--good)}.gd-warn{color:var(--warn)}.gd-poor{color:var(--poor)}
 .bg-good{background:var(--good)}.bg-warn{background:var(--warn)}.bg-poor{background:var(--poor)}
 .metric{font-family:'JetBrains Mono';font-size:27px;font-weight:600;letter-spacing:-.02em;margin-top:9px;line-height:1}
@@ -605,6 +607,30 @@ async function scoreUrl(u){
   if(j.error) throw new Error(j.error);
   return j;
 }
+// Scores are NOT auto-saved. You choose which URLs to keep tracking with the
+// "★ Save & track" button on each result card.
+let LAST_SCORES={};
+async function saveScore(url){
+  const r=LAST_SCORES[url];
+  if(!r){ alert('Score this URL again, then save.'); return; }
+  if(!(LIVE&&sb)){ alert('Not connected to Supabase.'); return; }
+  const btn=document.getElementById('save-'+btoa(url).replace(/=/g,''));
+  if(btn){ btn.textContent='saving…'; btn.disabled=true; }
+  try{
+    const {error}=await sb.from('web_scores').insert([{url:r.url,overall:r.scores.overall,
+      performance:r.scores.performance,seo:r.scores.seo,accessibility:r.scores.accessibility,
+      best_practices:r.scores.bestPractices,metrics:r.metrics,saved:true}]);
+    if(error) throw error;
+    if(btn){ btn.textContent='✓ tracking'; btn.classList.add('saved'); }
+    loaded.ws=1; await loadSavedScores();
+  }catch(e){
+    if(btn){btn.textContent='★ Save & track'; btn.disabled=false;}
+    const missing=/PGRST205|schema cache|does not exist/i.test(e.message||'');
+    alert(missing
+      ? 'Saving needs the web_scores table.\n\nRun web_score.sql once in Supabase → SQL Editor, then try again.'
+      : 'Could not save: '+e.message);
+  }
+}
 async function runWebScore(){
   const u1=document.getElementById('wsUrl').value.trim(), u2=document.getElementById('wsUrl2').value.trim();
   if(!u1){alert('Enter a URL to score');return;}
@@ -614,11 +640,9 @@ async function runWebScore(){
   try{
     const targets=[u1,...(u2?[u2]:[])];
     const results=await Promise.all(targets.map(t=>scoreUrl(t).catch(e=>({error:e.message,url:t}))));
+    // hold the results so the Save button can store them on demand
+    LAST_SCORES={}; results.forEach(r=>{ if(!r.error) LAST_SCORES[r.url]=r; });
     box.innerHTML=results.map(scoreCardHTML).join('');
-    if(LIVE&&sb){
-      const rows=results.filter(r=>!r.error).map(r=>({url:r.url,overall:r.scores.overall,performance:r.scores.performance,seo:r.scores.seo,accessibility:r.scores.accessibility,best_practices:r.scores.bestPractices,metrics:r.metrics,saved:true}));
-      if(rows.length){ await sb.from('web_scores').insert(rows); loadSavedScores(); }
-    }
   }catch(e){ box.innerHTML='<div class="card"><div class="empty">Could not score: '+e.message+'</div></div>'; }
   btn.textContent=orig; btn.disabled=false;
 }
@@ -633,7 +657,8 @@ function scoreCardHTML(r){
       <div class="gauge" style="--v:${s.overall};--c:var(--${g})"><b class="gd-${g}">${s.overall}</b></div>
       <div style="min-width:0"><div class="pg" style="font-size:14px">${host}</div>
         <div style="font-size:11.5px;color:var(--faint);word-break:break-all">${r.url}</div>
-        <div style="font-size:11px;color:var(--faint);margin-top:4px">overall web score</div></div>
+        <div style="font-size:11px;color:var(--faint);margin-top:4px">overall web score</div>
+        <button class="pivbtn savebtn" id="save-${btoa(r.url).replace(/=/g,'')}" onclick="saveScore('${r.url}')">★ Save &amp; track</button></div>
     </div>
     <div style="margin-top:14px">
       ${sub('Performance',s.performance)}${sub('SEO',s.seo)}${sub('Accessibility',s.accessibility)}${sub('Best practices',s.bestPractices)}
