@@ -4,11 +4,17 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hashtag Eyewear · Site Monitor</title>
+<!-- PERF: warm up every origin we will hit, before we need them -->
+<link rel="preconnect" href="https://ijzudvwhzsnwysucyves.supabase.co" crossorigin>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<!-- PERF: 9 font files -> 5. Weights kept are the ones actually used. -->
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;600&family=JetBrains+Mono:wght@600&display=swap" rel="stylesheet">
+<!-- PERF: defer both libraries so they no longer block HTML parsing. Deferred
+     scripts still run in order, and before DOMContentLoaded, which is when we boot. -->
+<script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
 :root{
   --bg:#F5F6F8; --surface:#FFFFFF; --ink:#101728; --muted:#616B7C; --faint:#9AA3B2;
@@ -573,7 +579,11 @@ function navBtn(id,label,ic,isCat){
 function go(id){
   document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('on', n.dataset.nav===id));
   if(id.startsWith('cat:')){ curView='task'; curCat=id.slice(4); showView('task'); renderTask(); setTitle(curCat.replace(' Testing',''), 'Runs 5×/day · toggle manual checks as you verify'); }
-  else { curView=id; showView(id); setTitle(TITLES[id][0], TITLES[id][1]); renderView(id); }
+  else {
+    curView=id; showView(id); setTitle(TITLES[id][0], TITLES[id][1]);
+    renderView(id);                                  // paint immediately with what we have
+    ensureData(id).then(()=>{ if(curView===id) renderView(id); }); // then fill in lazily-loaded tables
+  }
   toggleSide(false);
 }
 function toggleSide(force){
@@ -730,27 +740,47 @@ function renderPurchases(){
    database: inserts climbed to 21s and visitor data was at risk of being lost.
    Rule: aggregate SERVER-side (dash_stats / dash_trend) and pull raw rows ONCE.
    Never add a count=exact or a deep .range() offset on rum_events. */
+/* PERF: the Summary view (the landing view) is served ENTIRELY by dash_stats +
+   dash_trend — it needs no raw tables at all. So the initial load now fetches only
+   the two small tables the sidebar needs, and every other table is fetched lazily
+   the first time you open the view that uses it. That removes a 500-row payload and
+   3 queries from every single page load. */
+const loaded={};
+async function ensureData(view){
+  if(!(LIVE&&sb)) return;
+  const jobs=[];
+  if((view==='live'||view==='monitors') && !loaded.rum)
+    jobs.push(sb.from('rum_events').select('*').order('created_at',{ascending:false}).range(0,499)
+      .then(r=>{DATA.rum=r.data||[]; loaded.rum=1;}));
+  if(view==='monitors' && !loaded.mon)
+    jobs.push(sb.from('monitors').select('*').order('created_at')
+      .then(r=>{DATA.monitors=r.data||[]; loaded.mon=1;}));
+  if(view==='webvitals' && !loaded.psi)
+    jobs.push(sb.from('psi_results').select('*').order('created_at',{ascending:false}).limit(100)
+      .then(r=>{DATA.psi=r.data||[]; loaded.psi=1;}));
+  if(view==='purchases' && !loaded.buys)
+    jobs.push(sb.from('purchases').select('*').order('created_at',{ascending:false}).limit(200)
+      .then(r=>{DATA.purchases=r.data||[]; loaded.buys=1;}));
+  if(view==='webscore' && !loaded.ws){ loaded.ws=1; jobs.push(loadSavedScores()); }
+  if(jobs.length) await Promise.all(jobs);
+}
 async function loadAll(manual){
   document.getElementById('refreshBtn').textContent='↻ …';
   if(LIVE && sb){
     try{
-      // ONE page of recent rows (for the Live Data table) + the small tables.
-      // Everything aggregate comes from the RPCs, not from pulling rows.
-      const [rum1,psi,mon,items,checks,buys]=await Promise.all([
-        sb.from('rum_events').select('*').order('created_at',{ascending:false}).range(0,499),
-        sb.from('psi_results').select('*').order('created_at',{ascending:false}).limit(100),
-        sb.from('monitors').select('*').order('created_at'),
+      // Only what the shell needs: QA items + recent checks drive the sidebar dots.
+      const [items,checks]=await Promise.all([
         sb.from('task_items').select('*').order('sort'),
         sb.from('task_checks').select('*').order('created_at',{ascending:false}).limit(400),
-        sb.from('purchases').select('*').order('created_at',{ascending:false}).limit(200),
       ]);
-      DATA.rum=rum1.data||[]; DATA.psi=psi.data||[]; DATA.monitors=mon.data||[]; DATA.items=items.data||[]; DATA.checks=checks.data||[]; DATA.purchases=buys.data||[];
+      DATA.items=items.data||[]; DATA.checks=checks.data||[];
       document.getElementById('banner').style.display='none';
       document.getElementById('foot').textContent='Connected · '+new URL(CONFIG.url).hostname;
       setPulse(true,'live');
-      updateDots(); renderView(curView==='task'?null:curView); if(curView==='task')renderTask();
+      updateDots();
+      await ensureData(curView);                      // whatever the current view needs
+      renderView(curView==='task'?null:curView); if(curView==='task')renderTask();
       document.getElementById('refreshBtn').textContent='↻ Refresh';
-      loadSavedScores();
       return;
     }catch(e){ console.error(e); alert('Load failed: '+e.message); }
   } else {
@@ -817,16 +847,38 @@ function deltaHTML(metric,cur,base){
   const f=metric==='cls'?fmtCls:fmtMs;
   return `<div class="delta ${cls}">${arw} ${pct}%<span class="base">vs ${f(base)}</span></div>`;
 }
-// Server-side stats for a window. Postgres does the counting/percentiles over
-// EVERY row — the browser can only ever hold a truncated slice of a 12k/day feed.
+/* PERF: two-layer cache.
+   in-memory  -> instant within a session
+   sessionStorage -> a RELOAD paints from the last result immediately instead of
+                     waiting ~1-3s for Postgres to re-aggregate 60k+ rows.
+   Stale entries are still shown first, then quietly refreshed (stale-while-revalidate). */
 const statsCache={};
+const SS_TTL=10*60*1000;                     // keep a reload usable for 10 min
+function ssGet(k){
+  try{ const r=JSON.parse(sessionStorage.getItem('hm:'+k)||'null');
+       return (r && Date.now()-r.t < SS_TTL) ? r : null; }catch(e){ return null; }
+}
+function ssPut(k,v){ try{ sessionStorage.setItem('hm:'+k,JSON.stringify({t:Date.now(),v})); }catch(e){} }
+
+const statsInflight={};                       // de-dupe identical concurrent RPCs
 async function fetchStats(from,to){
   if(!(LIVE&&sb)) return null;
-  const k=from+'_'+to; if(statsCache[k]) return statsCache[k];
+  const k='stats_'+from+'_'+to;
+  if(statsCache[k]) return statsCache[k];      // fresh in-memory result
+  if(statsInflight[k]) return statsInflight[k];// a call is already running for this window
+  const cached=ssGet(k);
+  if(cached){ statsCache[k]=cached.v; return cached.v; } // instant from last session; do NOT refetch on load
+  const p=refreshStats(from,to,k).finally(()=>{ delete statsInflight[k]; });
+  statsInflight[k]=p;
+  return p;
+}
+function statsKey(from,to){ return 'stats_'+from+'_'+to; } // used by renderSummary's cache peek
+async function refreshStats(from,to,k){
   try{
     const {data,error}=await sb.rpc('dash_stats',{p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString()});
     if(error) throw error;
-    statsCache[k]=data; setTimeout(()=>{delete statsCache[k];},60000);
+    statsCache[k]=data; ssPut(k,data);
+    setTimeout(()=>{delete statsCache[k];},60000);
     return data;
   }catch(e){ console.warn('dash_stats unavailable — run dash_rpc.sql. Falling back to (truncated) client data.',e.message); return null; }
 }
@@ -840,8 +892,8 @@ function renderSummary(){
   // Postgres does the real maths.
   // Already have true numbers for this window? Keep showing them — never flash a
   // placeholder (or a stale wrong figure) over data that is already correct.
-  const cached=statsCache[cur.from+'_'+cur.to];
-  const cachedB=cmp?statsCache[cmp.from+'_'+cmp.to]:null;
+  const cached=statsCache[statsKey(cur.from,cur.to)] || (ssGet(statsKey(cur.from,cur.to))||{}).v;
+  const cachedB=cmp?(statsCache[statsKey(cmp.from,cmp.to)] || (ssGet(statsKey(cmp.from,cmp.to))||{}).v):null;
   if(cached) paintSummary(cur,cmp,cached,cachedB);
   else if(rpcOK!==false) paintLoading(cur);
   else paintSummary(cur,cmp,null,null);            // RPC missing: client data, clearly labelled partial
@@ -903,10 +955,27 @@ const METRIC_META={
   ttfb:{label:'TTFB',color:'#059669', div:1000, unit:'s', fmt:v=>fmtMs(v)},
 };
 function autoBucket(from,to){ const h=(to-from)/3600000; if(h<=12)return 'minute'; if(h<=96)return 'hour'; return 'day'; }
+// PERF: same two-layer cache as fetchStats. Switching metric tabs (LCP->INP->CLS)
+// then switching back is instant instead of re-querying Postgres each time.
+const trendCache={}, trendInflight={};
 async function fetchTrend(from,to,bucket,metric){
   if(!(LIVE&&sb)) return null;
-  try{ const {data,error}=await sb.rpc('dash_trend',{p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString(),p_bucket:bucket,p_metric:metric}); if(error)throw error; return data; }
-  catch(e){ console.warn('dash_trend unavailable — run dash_trend.sql',e.message); return null; }
+  const k='trend_'+from+'_'+to+'_'+bucket+'_'+metric;
+  if(trendCache[k]) return trendCache[k];
+  if(trendInflight[k]) return trendInflight[k];
+  const cached=ssGet(k);
+  if(cached){ trendCache[k]=cached.v; setTimeout(()=>{delete trendCache[k];},60000); return cached.v; }
+  const run=(async()=>{
+    try{
+      const {data,error}=await sb.rpc('dash_trend',{p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString(),p_bucket:bucket,p_metric:metric});
+      if(error)throw error;
+      trendCache[k]=data; ssPut(k,data);
+      setTimeout(()=>{delete trendCache[k];},60000);
+      return data;
+    }catch(e){ console.warn('dash_trend unavailable — run dash_trend.sql',e.message); return null; }
+  })().finally(()=>{ delete trendInflight[k]; });
+  trendInflight[k]=run;
+  return run;
 }
 let trendToken=0;
 async function updateTrend(cur,cmp){
@@ -1065,6 +1134,8 @@ function renderAudience(rows,S){
 // already refreshes the view (debounced) using the cached dash_stats result.
 function refreshAudienceSoon(){ /* intentionally a no-op — see DB-LOAD BUDGET above */ }
 let sumTimer; function renderSummarySoon(){clearTimeout(sumTimer);sumTimer=setTimeout(()=>{if(curView==='summary')renderSummary();},1200);}
+let liveTimer; function renderLiveSoon(){clearTimeout(liveTimer);liveTimer=setTimeout(()=>{if(curView==='live')renderLive();},700);}
+let wvTimer;   function renderWVLiveSoon(){clearTimeout(wvTimer);wvTimer=setTimeout(()=>{if(curView==='webvitals')renderWVLive();},900);}
 /* ---- Pivot report: a dimension (device/os/net/ref) broken down by page group ---- */
 function pageGroup(p){p=p||'/';if(p==='/'||p==='')return 'Homepage';if(p.startsWith('/collections'))return 'Collections';if(p.startsWith('/products'))return 'Products';if(p.startsWith('/cart'))return 'Cart';if(p.startsWith('/pages'))return 'Pages';if(p.startsWith('/apps'))return 'Apps';return 'Other';}
 function dimValue(r,dim){
@@ -1303,9 +1374,12 @@ async function runPSI(mons, btn, alsoTask){
 function subscribe(){
   if(!LIVE||!sb)return;
   sb.channel('rum').on('postgres_changes',{event:'INSERT',schema:'public',table:'rum_events'},payload=>{
-    const r=payload.new; r._fresh=true; DATA.rum.unshift(r); if(DATA.rum.length>8000)DATA.rum.pop();
-    if(curView==='live')renderLive(); if(curView==='summary')renderSummarySoon(); if(curView==='webvitals')renderWVLive();
-    refreshAudienceSoon();
+    // PERF: keep only what the Live table can show, and never rebuild a table per
+    // event — bursts of beacons would otherwise re-render on every single insert.
+    const r=payload.new; r._fresh=true; DATA.rum.unshift(r); if(DATA.rum.length>600)DATA.rum.pop();
+    if(curView==='live')renderLiveSoon();
+    else if(curView==='summary')renderSummarySoon();
+    else if(curView==='webvitals')renderWVLiveSoon();
     const p=document.getElementById('pulse');p.classList.remove('off');
   }).subscribe();
 }
@@ -1320,7 +1394,14 @@ function saveConfig(){
 }
 
 /* ===================== BOOT ================== */
-buildNav();buildAudienceCards();initRangeBar();initTrendControls();initSB();loadAll().then(subscribe);
+// PERF: paint the shell immediately, then boot once the deferred libraries land.
+// (supabase-js / Chart.js are `defer`, so they execute before DOMContentLoaded.)
+function boot(){
+  buildNav();buildAudienceCards();initRangeBar();initTrendControls();initSB();
+  loadAll().then(subscribe);
+}
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',boot);
+else boot();
 </script>
 </body>
 </html>
