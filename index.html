@@ -109,10 +109,12 @@ a{color:inherit}
 /* soft neumorphic glow behind the disc */
 .pie3d::before{content:"";position:absolute;width:64%;height:64%;border-radius:50%;
   background:radial-gradient(circle, rgba(79,70,229,.16), transparent 68%);filter:blur(16px);z-index:0}
-.pie3d canvas{position:relative;z-index:1;transform:rotateX(52deg);
-  filter:drop-shadow(0 16px 12px rgba(16,23,40,.22)) drop-shadow(0 4px 3px rgba(16,23,40,.12));
-  transition:transform .55s cubic-bezier(.34,1.2,.4,1)}
-.flipcard:hover .pie3d canvas{transform:rotateX(42deg) scale(1.03)}
+/* No CSS tilt any more — the pie is drawn with real 3D geometry inside the canvas
+   (elliptical projection + extruded walls), so a transform here would double-squash it. */
+.pie3d canvas{position:relative;z-index:1;width:100%;height:100%;display:block}
+.pietip{position:fixed;display:none;z-index:60;background:#0E1728;color:#fff;font-size:11.5px;
+  padding:6px 9px;border-radius:7px;pointer-events:none;box-shadow:0 6px 18px rgba(16,23,40,.3);white-space:nowrap}
+.pietip b{font-weight:600}
 .legend{display:flex;flex-wrap:wrap;gap:5px 10px;justify-content:center;margin-top:10px;font-size:10.5px;color:var(--muted);flex-shrink:0}
 .legend .lg{display:inline-flex;align-items:center;gap:4px}
 .legend i{width:8px;height:8px;border-radius:2px;display:inline-block;flex-shrink:0}
@@ -1119,18 +1121,131 @@ function buildAudienceCards(){
     </div>`).join('');
 }
 function flipCard(k,toBack){ const c=document.getElementById('fc-'+k); if(c)c.classList.toggle('flipped',!!toBack); }
+/* ---- TRUE 3D extruded pie, drawn natively in canvas ----------------------
+   Real 3D geometry (elliptical projection + extruded side walls), not a CSS tilt:
+     · perspective squash  -> ry = rx * 0.42
+     · side walls drawn only for the arc facing the viewer (angles in [0, PI])
+     · radial gloss + rim light for the glass finish
+     · soft contact shadow underneath
+   Slices animate on first paint and lift slightly on hover, with a tooltip.       */
+const TWO_PI=Math.PI*2;
+const nrm=a=>{a%=TWO_PI; return a<0?a+TWO_PI:a;};
+function shade(hex,amt){                       // amt>0 lighten, amt<0 darken
+  const c=hex.replace('#',''); const n=parseInt(c.length===3?c.split('').map(x=>x+x).join(''):c,16);
+  let r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  const f=x=>Math.max(0,Math.min(255,Math.round(amt>=0 ? x+(255-x)*amt : x*(1+amt))));
+  return `rgb(${f(r)},${f(g)},${f(b)})`;
+}
+const pieState={};                              // id -> {slices, geom, hover}
 function drawPie3d(id,key,entries,pal,legendId){
-  const ctx=document.getElementById(id); if(!ctx)return;
-  if(charts[key])charts[key].destroy();
-  charts[key]=new Chart(ctx,{type:'pie',
-    data:{labels:entries.map(e=>e[0]),datasets:[{data:entries.map(e=>e[1]),backgroundColor:pal,borderWidth:1,borderColor:'rgba(255,255,255,.55)'}]},
-    options:{maintainAspectRatio:false,animation:{animateRotate:true,duration:700},
-      plugins:{legend:{display:false},tooltip:{enabled:true}}}});
+  const cv=document.getElementById(id); if(!cv)return;
+  if(charts[key]){ try{charts[key].destroy();}catch(e){} delete charts[key]; }  // drop any old Chart.js instance
+  const total=entries.reduce((a,e)=>a+e[1],0)||1;
+
+  // legend (unchanged contract)
   const lg=document.getElementById(legendId);
-  if(lg){
-    const total=entries.reduce((a,e)=>a+e[1],0)||1;
-    lg.innerHTML=entries.map((e,i)=>`<span class="lg"><i style="background:${pal[i%pal.length]}"></i>${e[0]} <b>${Math.round(e[1]/total*100)}%</b></span>`).join('');
-  }
+  if(lg) lg.innerHTML=entries.map((e,i)=>`<span class="lg"><i style="background:${pal[i%pal.length]}"></i>${e[0]} <b>${Math.round(e[1]/total*100)}%</b></span>`).join('');
+
+  const slices=[]; let ang=-Math.PI/2;
+  entries.forEach((e,i)=>{
+    const frac=e[1]/total, end=ang+frac*TWO_PI;
+    slices.push({start:ang,end,frac,label:e[0],value:e[1],color:pal[i%pal.length]});
+    ang=end;
+  });
+  pieState[id]={slices,hover:-1,t0:performance.now()};
+  attachPieHover(cv,id,total);
+  paintPie(cv,id,total);
+}
+function paintPie(cv,id,total,progress){
+  const st=pieState[id]; if(!st)return;
+  const ctx=cv.getContext('2d');
+  const dpr=window.devicePixelRatio||1;
+  const W=cv.clientWidth||cv.parentNode.clientWidth||220, H=cv.clientHeight||cv.parentNode.clientHeight||160;
+  if(cv.width!==W*dpr||cv.height!==H*dpr){ cv.width=W*dpr; cv.height=H*dpr; }
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+
+  const p = progress==null?1:progress;
+  const rx=Math.min(W*0.38,H*0.92), ry=rx*0.42, depth=Math.max(12,rx*0.20);
+  const cx=W/2, cy=H/2-depth*0.35;
+
+  // contact shadow
+  ctx.save();
+  ctx.filter='blur(7px)';
+  ctx.beginPath(); ctx.ellipse(cx,cy+depth+5,rx*0.92,ry*0.75,0,0,TWO_PI);
+  ctx.fillStyle='rgba(16,23,40,.22)'; ctx.fill();
+  ctx.restore();
+
+  const drawn=st.slices.map(s=>({...s,
+    start:-Math.PI/2+(s.start+Math.PI/2)*p, end:-Math.PI/2+(s.end+Math.PI/2)*p}));
+
+  // ---- side walls: only the arc facing the viewer (canvas angles 0..PI) ----
+  drawn.forEach((s,i)=>{
+    const lift = st.hover===i ? -4 : 0;
+    let a0=nrm(s.start), a1=nrm(s.end);
+    const segs = a1>a0 ? [[a0,a1]] : [[a0,TWO_PI],[0,a1]];
+    segs.forEach(([b0,b1])=>{
+      const c0=Math.max(b0,0), c1=Math.min(b1,Math.PI);
+      if(c1<=c0) return;
+      ctx.beginPath();
+      ctx.ellipse(cx,cy+lift,rx,ry,0,c0,c1);
+      ctx.lineTo(cx+rx*Math.cos(c1), cy+lift+ry*Math.sin(c1)+depth);
+      ctx.ellipse(cx,cy+lift+depth,rx,ry,0,c1,c0,true);
+      ctx.closePath();
+      const g=ctx.createLinearGradient(0,cy+lift,0,cy+lift+depth);
+      g.addColorStop(0,shade(s.color,-0.10));
+      g.addColorStop(1,shade(s.color,-0.48));
+      ctx.fillStyle=g; ctx.fill();
+    });
+  });
+
+  // ---- top faces ----
+  drawn.forEach((s,i)=>{
+    const lift = st.hover===i ? -4 : 0;
+    ctx.beginPath(); ctx.moveTo(cx,cy+lift);
+    ctx.ellipse(cx,cy+lift,rx,ry,0,s.start,s.end); ctx.closePath();
+    const g=ctx.createRadialGradient(cx-rx*0.35,cy+lift-ry*1.1,rx*0.05,cx,cy+lift,rx*1.05);
+    g.addColorStop(0,shade(s.color,0.34));
+    g.addColorStop(0.55,shade(s.color,0.05));
+    g.addColorStop(1,shade(s.color,-0.12));
+    ctx.fillStyle=g; ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,.55)'; ctx.lineWidth=1; ctx.stroke();
+  });
+
+  // ---- glass rim light across the top ----
+  ctx.save();
+  ctx.beginPath(); ctx.ellipse(cx,cy,rx,ry,0,0,TWO_PI); ctx.clip();
+  const gl=ctx.createLinearGradient(0,cy-ry,0,cy+ry*0.2);
+  gl.addColorStop(0,'rgba(255,255,255,.34)'); gl.addColorStop(1,'rgba(255,255,255,0)');
+  ctx.fillStyle=gl; ctx.fillRect(cx-rx,cy-ry,rx*2,ry*1.3);
+  ctx.restore();
+
+  if(p<1) requestAnimationFrame(()=>paintPie(cv,id,total,Math.min(1,(performance.now()-st.t0)/650)));
+}
+function attachPieHover(cv,id,total){
+  if(cv._pieHooked) return; cv._pieHooked=1;
+  const tip=document.getElementById('pieTip')||(()=>{ const d=document.createElement('div');
+    d.id='pieTip'; d.className='pietip'; document.body.appendChild(d); return d; })();
+  cv.addEventListener('mousemove',ev=>{
+    const st=pieState[id]; if(!st)return;
+    const r=cv.getBoundingClientRect();
+    const W=cv.clientWidth,H=cv.clientHeight;
+    const rx=Math.min(W*0.38,H*0.92), ry=rx*0.42, depth=Math.max(12,rx*0.20);
+    const cx=W/2, cy=H/2-depth*0.35;
+    const x=ev.clientX-r.left-cx, y=ev.clientY-r.top-cy;
+    const inside=(x*x)/(rx*rx)+(y*y)/(ry*ry)<=1;
+    let hit=-1;
+    if(inside){ const a=nrm(Math.atan2(y/ry,x/rx));
+      hit=st.slices.findIndex(s=>{ const s0=nrm(s.start),s1=nrm(s.end);
+        return s1>s0 ? (a>=s0&&a<s1) : (a>=s0||a<s1); }); }
+    if(hit!==st.hover){ st.hover=hit; paintPie(cv,id,total); }
+    if(hit>=0){ const s=st.slices[hit];
+      tip.innerHTML=`<b>${s.label}</b> ${Math.round(s.frac*100)}% · ${(+s.value).toLocaleString()}`;
+      tip.style.cssText+=`;display:block;left:${ev.clientX+12}px;top:${ev.clientY-34}px`;
+    } else tip.style.display='none';
+  });
+  cv.addEventListener('mouseleave',()=>{ const st=pieState[id]; if(st&&st.hover!==-1){st.hover=-1;paintPie(cv,id,total);}
+    const t=document.getElementById('pieTip'); if(t)t.style.display='none'; });
 }
 function renderAudience(rows,S){
   // Prefer server aggregates (whole window). Fall back to loaded rows only if the
