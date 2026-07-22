@@ -776,7 +776,8 @@ const loaded={};
 async function ensureData(view){
   if(!(LIVE&&sb)) return;
   const jobs=[];
-  if((view==='live'||view==='monitors') && !loaded.rum)
+  // Only the raw Live Data feed needs actual rows now — Monitors/Web Vitals aggregate server-side.
+  if(view==='live' && !loaded.rum)
     jobs.push(sb.from('rum_events').select('*').order('created_at',{ascending:false}).range(0,499)
       .then(r=>{DATA.rum=r.data||[]; loaded.rum=1;}));
   if(view==='monitors' && !loaded.mon)
@@ -900,6 +901,29 @@ async function fetchStats(from,to){
   return p;
 }
 function statsKey(from,to){ return 'stats_'+from+'_'+to; } // used by renderSummary's cache peek
+
+/* Generic cached RPC (same two-layer cache + in-flight de-dupe as fetchStats).
+   Used by the pivot / per-page / per-page-per-day tables, which used to be computed
+   in the browser from DATA.rum — impossible once that array is a truncated slice. */
+const rpcCache={}, rpcInflight={};
+async function cachedRpc(fn,args,key){
+  if(!(LIVE&&sb)) return null;
+  if(rpcCache[key]) return rpcCache[key];
+  if(rpcInflight[key]) return rpcInflight[key];
+  const c=ssGet(key); if(c){ rpcCache[key]=c.v; setTimeout(()=>{delete rpcCache[key];},60000); return c.v; }
+  const p=(async()=>{
+    try{
+      const {data,error}=await sb.rpc(fn,args); if(error) throw error;
+      rpcCache[key]=data; ssPut(key,data); setTimeout(()=>{delete rpcCache[key];},60000);
+      return data;
+    }catch(e){ console.warn(fn+' unavailable — run dash_tables.sql',e.message); return null; }
+  })().finally(()=>{ delete rpcInflight[key]; });
+  rpcInflight[key]=p; return p;
+}
+const iso=t=>new Date(t).toISOString();
+const fetchPivot     =(f,t)=>cachedRpc('dash_pivot',     {p_from:iso(f),p_to:iso(t)},            'piv_'+f+'_'+t);
+const fetchPages     =(f,t)=>cachedRpc('dash_pages',     {p_from:iso(f),p_to:iso(t),p_limit:60}, 'pgs_'+f+'_'+t);
+const fetchPageDaily =(f,t)=>cachedRpc('dash_page_daily',{p_from:iso(f),p_to:iso(t),p_limit:25}, 'pgd_'+f+'_'+t);
 async function refreshStats(from,to,k){
   try{
     const {data,error}=await sb.rpc('dash_stats',{p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString()});
@@ -1265,8 +1289,8 @@ function renderAudience(rows,S){
   drawPie3d('osChart','os',a.os,OSPAL,'osLegend');
   drawPie3d('netChart','net',a.net,NETPAL,'netLegend');
   drawPie3d('refChart','ref',a.ref,REFPAL,'refLegend');
-  // fill each card's back face with its pivot table
-  AUD_DIMS.forEach(d=>{ const p=document.getElementById(d.k+'Pivot'); if(p)p.innerHTML=pivotHTML(d.k); });
+  // fill each card's back face with its pivot table (server-aggregated, async)
+  refreshPivots();
   const el=document.getElementById('audRange');
   if(el)el.textContent=(a.total||0).toLocaleString()+' sessions in range'+(S?'':' (partial)');
 }
@@ -1285,45 +1309,67 @@ function dimValue(r,dim){
   const x=(r.referrer||'').toLowerCase();
   if(!x)return'Direct';if(x.includes('instagram'))return'Instagram';if(x.includes('facebook'))return'Facebook';if(x.includes('google'))return'Google';if(x.includes('hashtageyewear'))return'Internal';return'Other';
 }
-// Returns the pivot table HTML: dimension rows x page-group columns, for the current date window.
+// Pivot table: dimension rows x page-group columns. Data comes from dash_pivot
+// (server-aggregated over the WHOLE window) — the browser only ever holds a slice.
+let PIVOT_DATA=null;
 function pivotHTML(dim){
-  const cur=windowRange(), rows=rowsIn(cur.from,cur.to);
+  if(!PIVOT_DATA) return '<div class="empty">Loading…</div>';
+  const rows=PIVOT_DATA[dim]||[];                       // [[key, group, count], …]
   if(!rows.length) return '<div class="empty">No data in this range</div>';
   const ORDER=['Homepage','Collections','Products','Cart','Pages','Apps','Other'];
-  const groups=ORDER.filter(g=>rows.some(r=>pageGroup(r.path)===g));
-  const cats={};
-  rows.forEach(r=>{const c=dimValue(r,dim),g=pageGroup(r.path);cats[c]=cats[c]||{_t:0};cats[c][g]=(cats[c][g]||0)+1;cats[c]._t++;});
+  const groups=ORDER.filter(g=>rows.some(r=>r[1]===g));
+  const cats={}, colTot={};
+  rows.forEach(([k,g,c])=>{ c=+c;
+    cats[k]=cats[k]||{_t:0}; cats[k][g]=(cats[k][g]||0)+c; cats[k]._t+=c;
+    colTot[g]=(colTot[g]||0)+c; });
   const catList=Object.keys(cats).sort((a,b)=>cats[b]._t-cats[a]._t);
+  const grand=+PIVOT_DATA.total||catList.reduce((a,k)=>a+cats[k]._t,0);
   const title={device:'Device',os:'OS',net:'Network',ref:'Source'}[dim];
+  const f=n=>(+n).toLocaleString();
   let h=`<table class="piv"><thead><tr><th>${title}</th>${groups.map(g=>`<th class="m">${g}</th>`).join('')}<th class="m">Total</th></tr></thead><tbody>`;
-  catList.forEach(c=>{ h+=`<tr><td>${c}</td>${groups.map(g=>`<td class="cell mono">${cats[c][g]||0}</td>`).join('')}<td class="cell mono"><b>${cats[c]._t}</b></td></tr>`; });
-  h+=`<tr class="avg"><td>Total</td>${groups.map(g=>`<td class="cell mono">${rows.filter(r=>pageGroup(r.path)===g).length}</td>`).join('')}<td class="cell mono"><b>${rows.length}</b></td></tr></tbody></table>`;
+  catList.forEach(c=>{ h+=`<tr><td>${c}</td>${groups.map(g=>`<td class="cell mono">${f(cats[c][g]||0)}</td>`).join('')}<td class="cell mono"><b>${f(cats[c]._t)}</b></td></tr>`; });
+  h+=`<tr class="avg"><td>Total</td>${groups.map(g=>`<td class="cell mono">${f(colTot[g]||0)}</td>`).join('')}<td class="cell mono"><b>${f(grand)}</b></td></tr></tbody></table>`;
   return h;
+}
+function refreshPivots(){
+  const cur=windowRange();
+  fetchPivot(cur.from,cur.to).then(P=>{
+    PIVOT_DATA=P;
+    AUD_DIMS.forEach(d=>{ const el=document.getElementById(d.k+'Pivot');
+      if(el) el.innerHTML = P ? pivotHTML(d.k)
+        : '<div class="empty">Run <b>dash_tables.sql</b> in Supabase to enable this table.</div>'; });
+  });
 }
 function baseOpts(unit){return{plugins:{legend:{display:false},tooltip:{intersect:false,mode:'index'}},scales:{x:{grid:{display:false},ticks:{font:{size:9},color:'#9AA3B2',maxRotation:0,autoSkip:true,maxTicksLimit:8}},y:{grid:{color:'#F0F1F4'},ticks:{font:{size:10},callback:v=>(Math.round(v*100)/100)+(unit||'')}}},maintainAspectRatio:false};}
 
 /* ===================== WEB VITALS TABLE ================== */
 /* LIVE, real users — the actual live tracker, built from the beacon (RUM). */
+// Per-page p75 over the WHOLE selected window, aggregated by Postgres (dash_pages).
+// Previously grouped DATA.rum in the browser, which only held ~500 rows — that is why
+// every page showed 1-2 views instead of real traffic.
 function renderWVLive(){
   const fd=(document.getElementById('wvDevice')||{}).value||'';
-  const rows=DATA.rum.filter(r=>!fd||r.device===fd);
-  const groups={};
-  rows.forEach(r=>{const k=(r.path||'/')+'||'+(r.device||'');(groups[k]=groups[k]||[]).push(r)});
-  const list=Object.entries(groups).map(([k,arr])=>{
-    const [path,device]=k.split('||');
-    return {path,device,n:arr.length,
-      lcp:p75(arr.map(x=>x.lcp)),inp:p75(arr.map(x=>x.inp)),cls:p75(arr.map(x=>x.cls)),
-      fcp:p75(arr.map(x=>x.fcp)),ttfb:p75(arr.map(x=>x.ttfb))};
-  }).sort((a,b)=>b.n-a.n).slice(0,24);
   const body=document.getElementById('wvLiveBody');
-  if(!list.length){body.innerHTML='<tr><td colspan=7 class="empty">No real-user data yet — pages appear here as the beacon reports them.</td></tr>';return;}
-  body.innerHTML=list.map(x=>{
-    const short=x.path==='/'?'Homepage':x.path.replace(/^\//,'').replace(/-/g,' ');
-    return `<tr>
-      <td><div class="pg">${short.length>40?short.slice(0,40)+'…':short}<small>${x.path} · <span class="plat">${x.device}</span></small></div></td>
-      ${wvCell('lcp',x.lcp,fmtMs)}${wvCell('inp',x.inp,fmtMs)}${wvCell('cls',x.cls,fmtCls)}${wvCell('fcp',x.fcp,fmtMs)}${wvCell('ttfb',x.ttfb,fmtMs)}
-      <td class="cell mono" style="color:var(--muted)">${x.n}</td></tr>`;
-  }).join('');
+  const cur=windowRange();
+  if(!body) return;
+  if(!body.dataset.filled) body.innerHTML='<tr><td colspan=7 class="empty">Loading…</td></tr>';
+  fetchPages(cur.from,cur.to).then(P=>{
+    if(!P){ body.innerHTML='<tr><td colspan=7 class="empty">Run <b>dash_tables.sql</b> in Supabase to enable this table.</td></tr>'; return; }
+    let list=P.map(a=>({path:a[0],device:a[1],n:+a[2],
+      lcp:a[3]==null?null:+a[3], inp:a[4]==null?null:+a[4], cls:a[5]==null?null:+a[5],
+      fcp:a[6]==null?null:+a[6], ttfb:a[7]==null?null:+a[7]}));
+    if(fd) list=list.filter(x=>x.device===fd);
+    list.sort((a,b)=>b.n-a.n); list=list.slice(0,24);
+    if(!list.length){ body.innerHTML='<tr><td colspan=7 class="empty">No real-user data in this range.</td></tr>'; return; }
+    body.dataset.filled='1';
+    body.innerHTML=list.map(x=>{
+      const short=x.path==='/'?'Homepage':x.path.replace(/^\//,'').replace(/-/g,' ');
+      return `<tr>
+        <td><div class="pg">${short.length>40?short.slice(0,40)+'…':short}<small>${x.path} · <span class="plat">${x.device}</span></small></div></td>
+        ${wvCell('lcp',x.lcp,fmtMs)}${wvCell('inp',x.inp,fmtMs)}${wvCell('cls',x.cls,fmtCls)}${wvCell('fcp',x.fcp,fmtMs)}${wvCell('ttfb',x.ttfb,fmtMs)}
+        <td class="cell mono" style="color:var(--muted)">${x.n.toLocaleString()}</td></tr>`;
+    }).join('');
+  });
 }
 function latestPSI(){
   const seen={},out=[];
@@ -1406,16 +1452,45 @@ function monCell(metric, series){
   const vc=metric==='views'?'var(--ink)':(rt==='good'?'var(--good)':rt==='warn'?'var(--warn)':rt==='poor'?'var(--poor)':'var(--faint)');
   return `<td class="cell"><div class="spark10">${bars}</div><div class="cellval" style="color:${vc}">${overall==null?'—':f(overall)}</div></td>`;
 }
+// Build a 10-day series for one path+device from the server's per-day rows.
+// (Was computed from DATA.rum, which holds ~1 hour of traffic — hence only 1-3 bars.)
+function seriesFromDaily(daily, mp, dev, metric, days){
+  const today=dayStart(Date.now()), out=[];
+  for(let i=days-1;i>=0;i--){
+    const key=new Date(today-i*DAY).toISOString().slice(0,10);
+    let n=0, vals=[];
+    daily.forEach(a=>{
+      const [path,device,d,cnt,lcp,inp,cls,fcp,ttfb]=a;
+      if(device!==dev) return;
+      if(!monPathMatch(path,mp)) return;
+      if(String(d).slice(0,10)!==key) return;
+      n+=+cnt;
+      const v={lcp,inp,cls,fcp,ttfb}[metric];
+      if(v!=null) vals.push(+v);
+    });
+    out.push(metric==='views' ? n : (vals.length? vals.sort((x,y)=>x-y)[Math.min(vals.length-1,Math.floor(vals.length*0.75))] : null));
+  }
+  return out;
+}
 function renderMonitors(){
   const mons=DATA.monitors, body=document.getElementById('monBody');
+  if(!body) return;
   if(!mons.length){ body.innerHTML='<tr><td colspan=7 class="empty">No monitors yet — add a page URL above.</td></tr>'; return; }
+  // 10-day window for the sparklines, independent of the Summary date picker
+  const to=nowQ(), from=to-10*DAY;
+  fetchPageDaily(from,to).then(daily=>{
+    if(!daily){ body.innerHTML='<tr><td colspan=7 class="empty">Run <b>dash_tables.sql</b> in Supabase to enable the daily sparklines.</td></tr>'; return; }
+    paintMonitors(mons, daily);
+  });
+}
+function paintMonitors(mons, daily){
+  const body=document.getElementById('monBody');
   const METRICS=['lcp','inp','cls','fcp','ttfb'];
   body.innerHTML=mons.map(m=>{
     const mp=monPath(m.url);
-    const pageRows=DATA.rum.filter(r=>monPathMatch(r.path, mp));
     return ['mobile','desktop'].map(dev=>{
-      const dr=pageRows.filter(r=>r.device===dev);
-      const cells=METRICS.map(k=>monCell(k, dailySeries(dr,k,10))).join('') + monCell('views', dailySeries(dr,'views',10));
+      const cells=METRICS.map(k=>monCell(k, seriesFromDaily(daily,mp,dev,k,10))).join('')
+                + monCell('views', seriesFromDaily(daily,mp,dev,'views',10));
       const cached=dev==='mobile'?m.screenshot_mobile:m.screenshot_desktop;
       const shot=cached || (dev==='mobile'
         ? `https://image.thum.io/get/viewportWidth/400/width/160/${m.url}`
