@@ -27,5 +27,8 @@ jobs:
           PSI_KEY:              ${{ secrets.PSI_KEY }}
           GA_PROPERTY_ID:       ${{ secrets.GA_PROPERTY_ID }}
           GA_SA_KEY:            ${{ secrets.GA_SA_KEY }}
+          SHOPIFY_STORE:        ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_TOKEN:        ${{ secrets.SHOPIFY_TOKEN }}
+          SHOPIFY_BACKFILL_DAYS: ${{ secrets.SHOPIFY_BACKFILL_DAYS }}
           RUN_TYPE:             scheduled
         run: node scripts/check.mjs

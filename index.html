@@ -465,14 +465,17 @@ a{color:inherit}
           <thead><tr><th>Visitor group</th><th class="m">Visitors</th><th class="m">Buyers</th><th class="m">Conv. rate</th><th class="m">LCP p75</th><th class="m">Avg time on page</th></tr></thead>
           <tbody id="speedVsConv"></tbody>
         </table></div>
-        <div class="section-h"><h2>Recent orders</h2><span id="buyNote">what each buyer actually experienced on the site</span></div>
+        <div class="section-h"><h2>Recent orders — linked to browsing</h2><span id="buyNote">the subset of orders that carry page-speed data</span></div>
         <div class="wv"><table>
           <thead><tr><th>When</th><th>Transaction ID</th><th class="m">Value</th><th class="m">Device</th><th>Pages seen</th><th class="m">Their LCP</th><th class="m">Time on site</th></tr></thead>
           <tbody id="buyBody"></tbody>
         </table></div>
         <p style="color:var(--faint);font-size:11.5px;margin-top:12px">
-          Orders arrive from the Shopify <b>checkout_completed</b> pixel and are matched to the shopper's own page-speed data via GA4's client id.
-          <b>No names or emails are stored</b> — for customer identity use Shopify → Orders. Rows show <span class="mono">—</span> where a buyer blocked cookies and couldn't be matched.
+          The tiles above (<b>Orders / Revenue / AOV</b>) come from the <b>Shopify Admin API</b> — every order, 100% accurate.
+          The table below is the small subset whose shopper accepted cookies, so their <b>checkout_completed</b> pixel fired and carried a
+          GA4 client id — the only orders that can be joined to page-speed and shown as a page-by-page journey. Most orders never carry that id
+          (cookies declined / thank-you page closed early), which is why "Linked to browsing" is far below "Orders".
+          <b>No names or emails are stored</b> — for customer identity use Shopify → Orders.
         </p>
       </section>
 
@@ -880,18 +883,27 @@ function renderPurchases(){
   const byClient={};
   rows.forEach(r=>{ if(r.ga_client_id){ (byClient[r.ga_client_id]=byClient[r.ga_client_id]||[]).push(r); } });
 
-  const revenue=buys.reduce((a,p)=>a+(+p.value||0),0);
-  const aov=buys.length?revenue/buys.length:null;
   const visitors=Object.keys(byClient).length;
   const buyerIds=new Set(buys.map(p=>p.ga_client_id).filter(Boolean));
-  const cvr=visitors?(buyerIds.size/visitors*100):null;
 
-  document.getElementById('buyTiles').innerHTML=[
-    ['Orders', buys.length.toLocaleString(), cur.label],
-    ['Revenue', money(revenue), cur.label],
-    ['Avg order value', money(aov), buys.length?`${buys.length} orders`:'no orders yet'],
-    ['Conversion rate', cvr==null?'—':cvr.toFixed(2)+'%', `${buyerIds.size} of ${visitors.toLocaleString()} matched visitors`],
-  ].map(([h,v,sub])=>`<div class="card"><h3>${h}</h3><div class="metric" style="color:var(--ink)">${v}</div><div class="metric-sub">${sub}</div></div>`).join('');
+  // Headline tiles use the ACCURATE Shopify feed (shop_orders) — the pixel only
+  // captures <1% of orders, so it must never drive the counts. Paint a placeholder,
+  // then fill in when the server total returns. Pixel `buys` = the linked subset.
+  const paintTiles=(s)=>{
+    const orders = s? s.orders : null;
+    const revenue = s? +s.revenue : buys.reduce((a,p)=>a+(+p.value||0),0);
+    const aov = s? (s.aov==null?null:+s.aov) : (buys.length?revenue/buys.length:null);
+    const el=document.getElementById('buyTiles'); if(!el) return;
+    el.innerHTML=[
+      ['Orders', orders==null?'…':orders.toLocaleString(), s?cur.label:'Shopify feed — run shopify_orders.sql'],
+      ['Revenue', s?money(revenue):'…', cur.label],
+      ['Avg order value', s?money(aov):'…', orders?`${orders.toLocaleString()} orders`:'—'],
+      ['Linked to browsing', `${buys.length.toLocaleString()}${orders?` / ${orders.toLocaleString()}`:''}`,
+        'orders carrying page-speed data'],
+    ].map(([h,v,sub])=>`<div class="card"><h3>${h}</h3><div class="metric" style="color:var(--ink)">${v}</div><div class="metric-sub">${sub}</div></div>`).join('');
+  };
+  paintTiles(null);
+  fetchShopStats(cur.from,cur.to).then(s=>{ if(s) paintTiles(s); });
 
   // fast vs slow: did speed cost the sale?
   const groups=[['Fast (LCP ≤ 2.5s)',r=>r.lcp!=null&&r.lcp<=2500],['Needs work (2.5–4s)',r=>r.lcp!=null&&r.lcp>2500&&r.lcp<=4000],['Slow (LCP > 4s)',r=>r.lcp!=null&&r.lcp>4000]];
@@ -1142,6 +1154,7 @@ const iso=t=>new Date(t).toISOString();
 const fetchPivot     =(f,t)=>cachedRpc('dash_pivot',     {p_from:iso(f),p_to:iso(t)},            'piv_'+f+'_'+t);
 const fetchPages     =(f,t)=>cachedRpc('dash_pages',     {p_from:iso(f),p_to:iso(t),p_limit:60}, 'pgs_'+f+'_'+t);
 const fetchPageDaily =(f,t)=>cachedRpc('dash_page_daily',{p_from:iso(f),p_to:iso(t),p_limit:25}, 'pgd_'+f+'_'+t);
+const fetchShopStats =(f,t)=>cachedRpc('shop_stats',     {p_from:iso(f),p_to:iso(t)},            'shop_'+f+'_'+t);
 async function refreshStats(from,to,k){
   try{
     const {data,error}=await sb.rpc('dash_stats',{p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString()});

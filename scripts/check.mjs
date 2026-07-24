@@ -19,6 +19,10 @@ const RUN_TYPE      = process.env.RUN_TYPE || 'scheduled';
 // Google Analytics (optional — skipped cleanly if not configured)
 const GA_PROPERTY_ID = process.env.GA_PROPERTY_ID || '';
 const GA_SA_KEY      = process.env.GA_SA_KEY || '';
+// Shopify Admin API (optional — the reliable, 100% order feed; skipped if unset)
+const SHOPIFY_STORE  = process.env.SHOPIFY_STORE || '';   // e.g. c6c623-3.myshopify.com
+const SHOPIFY_TOKEN  = process.env.SHOPIFY_TOKEN || '';   // Admin API access token (read_orders)
+const SHOPIFY_BACKFILL_DAYS = +(process.env.SHOPIFY_BACKFILL_DAYS || 0); // one-time deep pull
 
 if (!SUPABASE_URL || !SERVICE_KEY) {
   console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_KEY'); process.exit(1);
@@ -132,6 +136,72 @@ async function pullGA() {
     const landOrders = byLand.reduce((a, r) => a + r.m[2], 0);
     console.log(`GA: ${rows.length} rows · ${orders} purchases · revenue ${rev.toFixed(0)} · ${landOrders} purchases attributed to landing pages (last 28d)`);
   } catch (e) { console.error('GA pull failed:', e.message); }
+}
+
+// ---- Shopify Admin API (the reliable order feed) ---------------------------
+// The browser checkout_completed pixel captures <1% of orders. This pulls EVERY
+// order server-side, cursor-paginated, and upserts into shop_orders. Incremental
+// by default (only orders newer than the latest we have, with a small overlap so
+// nothing slips through); set SHOPIFY_BACKFILL_DAYS once for a deep historical pull.
+async function pullShopify() {
+  if (!SHOPIFY_STORE || !SHOPIFY_TOKEN) { console.log('Shopify not configured (SHOPIFY_STORE / SHOPIFY_TOKEN) — skipping.'); return; }
+  const API = '2024-10';
+  const base = `https://${SHOPIFY_STORE}/admin/api/${API}`;
+  const shH = { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' };
+
+  // Where to start: the deep backfill window if requested, else just after our newest row.
+  let sinceISO;
+  if (SHOPIFY_BACKFILL_DAYS > 0) {
+    sinceISO = new Date(Date.now() - SHOPIFY_BACKFILL_DAYS * 864e5).toISOString();
+  } else {
+    let latest = [];
+    try { latest = await sbSelect('shop_orders', 'select=created_at&order=created_at.desc&limit=1'); } catch {}
+    sinceISO = latest.length
+      ? new Date(new Date(latest[0].created_at).getTime() - 6 * 36e5).toISOString()  // 6h overlap
+      : new Date(Date.now() - 30 * 864e5).toISOString();                              // first run: 30 days
+  }
+
+  const first = new URL(`${base}/orders.json`);
+  first.searchParams.set('status', 'any');
+  first.searchParams.set('limit', '250');
+  first.searchParams.set('created_at_min', sinceISO);
+  first.searchParams.set('fields', 'id,name,created_at,processed_at,current_total_price,total_price,currency,financial_status,line_items,landing_site,referring_site,source_name');
+
+  let url = first.toString(), pages = 0, total = 0;
+  try {
+    while (url && pages < 200) {
+      const r = await fetch(url, { headers: shH, signal: AbortSignal.timeout(60000) });
+      if (r.status === 429) { await sleep(2500); continue; }        // throttled — wait and retry same url
+      if (!r.ok) { console.error('Shopify orders', r.status, (await r.text()).slice(0, 200)); break; }
+      const j = await r.json();
+      const orders = j.orders || [];
+      if (orders.length) {
+        const rows = orders.map(o => ({
+          id: o.id,
+          order_number: o.name,
+          created_at: o.created_at,
+          processed_at: o.processed_at,
+          total_price: +(o.current_total_price ?? o.total_price ?? 0),
+          currency: o.currency,
+          items: (o.line_items || []).reduce((a, li) => a + (+li.quantity || 0), 0),
+          financial_status: o.financial_status,
+          landing_site: (o.landing_site || '').split('?')[0].slice(0, 300),
+          referring_site: (o.referring_site || '').slice(0, 300),
+          source_name: o.source_name,
+          raw: { fetchedAt: new Date().toISOString() }
+        }));
+        await sbUpsert('shop_orders', rows, 'id');
+        total += rows.length;
+      }
+      pages++;
+      // cursor pagination: follow the rel="next" Link header
+      const link = r.headers.get('link') || '';
+      const next = link.split(',').find(s => s.includes('rel="next"'));
+      url = next ? next.slice(next.indexOf('<') + 1, next.indexOf('>')) : null;
+      if (url) await sleep(600); // stay under 2 req/s
+    }
+    console.log(`Shopify: upserted ${total} orders across ${pages} page(s) since ${sinceISO.slice(0, 10)}.`);
+  } catch (e) { console.error('Shopify pull failed:', e.message); }
 }
 
 // ---- PageSpeed Insights ----------------------------------------------------
@@ -384,6 +454,9 @@ async function runAuto(key, monitor, homepage) {
 
   // 0) Google Analytics: sessions / users / purchases / revenue -> ga_daily
   await pullGA();
+
+  // 0b) Shopify: the complete, reliable order feed -> shop_orders
+  await pullShopify();
 
   // 1) PageSpeed for every monitor, mobile + desktop
   const psiRows = [];
