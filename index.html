@@ -166,6 +166,29 @@ a{color:inherit}
   .cwvgrid.other{grid-template-columns:1fr;max-width:100%}
   .cwvdev{margin-left:0;width:100%}
 }
+/* ---- Lighthouse lab report (PageSpeed-style) ---- */
+.lhcats{display:flex;gap:26px;flex-wrap:wrap;justify-content:center;padding:20px 0 6px}
+.lhcat{text-align:center}
+.lhring{--v:0;--c:var(--good);width:88px;height:88px;border-radius:50%;margin:0 auto 7px;position:relative;
+  background:conic-gradient(var(--c) calc(var(--v)*1%),var(--line2) 0);display:flex;align-items:center;justify-content:center}
+.lhring::after{content:"";position:absolute;inset:7px;border-radius:50%;background:var(--surface)}
+.lhring b{position:relative;font-family:'JetBrains Mono';font-size:24px;font-weight:600}
+.lhcat .cn{font-size:12px;color:var(--muted);font-weight:600;margin-top:2px}
+.lhscale{display:flex;gap:14px;justify-content:center;font-size:11px;color:var(--faint);margin:2px 0 6px}
+.lhscale span{display:inline-flex;align-items:center;gap:5px}
+.lhscale em{width:8px;height:8px;border-radius:2px;display:inline-block;font-style:normal}
+.lhmetrics{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:8px}
+.lhmet{border:1px solid var(--line);border-radius:11px;padding:12px 14px}
+.lhmet .l{font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.lhmet .l em{width:9px;height:9px;border-radius:2px;display:inline-block;font-style:normal}
+.lhmet .v{font-family:'JetBrains Mono';font-size:21px;font-weight:600;margin-top:5px}
+.lhshot{max-width:190px;border:1px solid var(--line);border-radius:8px;margin:0 auto;display:block}
+.lhaudits{margin-top:6px}
+.lhaudit{display:flex;gap:10px;align-items:flex-start;padding:9px 2px;border-bottom:1px solid var(--line2);font-size:12.5px}
+.lhaudit .ic{flex-shrink:0;font-size:12px;margin-top:1px}
+.lhaudit .ttl{font-weight:500}
+.lhaudit .sav{margin-left:auto;color:var(--warn);font-family:'JetBrains Mono';font-size:12px;white-space:nowrap}
+@media(max-width:820px){.lhmetrics{grid-template-columns:1fr}}
 .savebtn{margin-top:9px}
 .savebtn.saved{border-color:var(--good);color:var(--good);background:var(--good-bg)}
 .gd-good{color:var(--good)}.gd-warn{color:var(--warn)}.gd-poor{color:var(--poor)}
@@ -475,9 +498,23 @@ a{color:inherit}
         <div class="toolbar">
           <input id="wsUrl" placeholder="https://any-website.com" style="flex:2;min-width:220px">
           <input id="wsUrl2" placeholder="(optional) second URL to compare" style="flex:2;min-width:220px">
-          <button class="btn pri" id="wsRun" onclick="runWebScore()">🎯 Score</button>
+          <button class="btn" id="wsRun" onclick="runWebScore()">🎯 Quick score</button>
+          <button class="btn pri" id="wsLab" onclick="runLighthouse()">🔬 Full Lighthouse</button>
         </div>
         <div id="wsResult" class="grid g2" style="align-items:start"></div>
+
+        <!-- Synthetic lab run — the real Lighthouse report, same engine as PageSpeed -->
+        <div id="labWrap" style="display:none">
+          <div class="section-h" style="margin-top:26px">
+            <h2>Lighthouse lab report</h2>
+            <span>one synthetic run · same engine as PageSpeed Insights</span>
+          </div>
+          <div class="toolbar">
+            <div class="segs sm" id="labStrategy"><button data-s="mobile" class="on">📱 Mobile</button><button data-s="desktop">🖥 Desktop</button></div>
+            <input id="psiKey" placeholder="Google PSI API key (optional, avoids rate limits)" style="flex:1;min-width:240px" onchange="localStorage.setItem('psi_key',this.value.trim())">
+          </div>
+          <div id="labReport"></div>
+        </div>
         <div class="section-h"><h2>Saved sites</h2><span id="wsSavedNote">score history · click to re-score</span></div>
         <div class="wv"><table>
           <thead><tr><th>Site</th><th class="m">Overall</th><th class="m">Perf</th><th class="m">SEO</th><th class="m">A11y</th><th class="m">Best</th><th class="m">Checked</th><th class="m"></th></tr></thead>
@@ -678,6 +715,95 @@ async function saveScore(url){
       ? 'Saving needs the web_scores table.\n\nRun web_score.sql once in Supabase → SQL Editor, then try again.'
       : 'Could not save: '+e.message);
   }
+}
+/* ---- Synthetic lab run via PageSpeed Insights (real Lighthouse) --------------
+   PSI supports CORS, so we call it straight from the browser (no serverless 10s
+   timeout). Keyless works at low volume; a free Google API key removes the limit.
+   This returns the SAME Lighthouse report PageSpeed shows.                       */
+let labStrategy='mobile';
+function initLabStrategy(){
+  document.querySelectorAll('#labStrategy button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('#labStrategy button').forEach(x=>x.classList.toggle('on',x===b));
+    labStrategy=b.dataset.s;
+  });
+  const k=localStorage.getItem('psi_key'); if(k){const el=document.getElementById('psiKey'); if(el)el.value=k;}
+}
+async function runLighthouse(){
+  let url=document.getElementById('wsUrl').value.trim();
+  if(!url){ alert('Enter a URL first'); return; }
+  if(!/^https?:\/\//i.test(url)) url='https://'+url;
+  document.getElementById('labWrap').style.display='';
+  const rep=document.getElementById('labReport');
+  const btn=document.getElementById('wsLab'), orig=btn.textContent; btn.textContent='⏳ running…'; btn.disabled=true;
+  rep.innerHTML='<div class="card"><div class="empty">Running a real Lighthouse audit on Google’s servers — this takes 15–40 seconds…</div></div>';
+  try{
+    const key=(localStorage.getItem('psi_key')||'').trim();
+    const api=new URL('https://www.googleapis.com/pagespeedonline/v5/runPagespeed');
+    api.searchParams.set('url',url);
+    api.searchParams.set('strategy',labStrategy);
+    ['performance','accessibility','best-practices','seo'].forEach(c=>api.searchParams.append('category',c));
+    if(key) api.searchParams.set('key',key);
+    const r=await fetch(api);
+    const j=await r.json();
+    if(j.error){
+      const q=j.error.code===429||/quota|rate/i.test(j.error.message||'');
+      rep.innerHTML=`<div class="card"><div class="empty">${q
+        ?'PageSpeed rate limit hit (keyless quota). Add a free Google PSI API key above and run again.<br><span style="font-size:11px">Get one at console.cloud.google.com → enable “PageSpeed Insights API” → create an API key.</span>'
+        :'Lighthouse failed: '+j.error.message}</div></div>`;
+      return;
+    }
+    rep.innerHTML=lighthouseHTML(j,url);
+  }catch(e){ rep.innerHTML='<div class="card"><div class="empty">Could not run Lighthouse: '+e.message+'</div></div>'; }
+  finally{ btn.textContent=orig; btn.disabled=false; }
+}
+function lighthouseHTML(j,url){
+  const lh=j.lighthouseResult, cats=lh.categories, a=lh.audits;
+  const ring=(cat,name)=>{ if(!cat) return '';
+    const s=Math.round((cat.score||0)*100), c=s>=90?'good':s>=50?'warn':'poor';
+    return `<div class="lhcat"><div class="lhring gd-${c}" style="--v:${s};--c:var(--${c})"><b class="gd-${c}">${s}</b></div><div class="cn">${name}</div></div>`; };
+  // lab metrics (score colour comes from the audit's own score)
+  const met=(k,label)=>{ const x=a[k]; if(!x) return '';
+    const s=x.score, c=s==null?'na':s>=0.9?'good':s>=0.5?'warn':'poor';
+    return `<div class="lhmet"><div class="l"><em style="background:var(--${c==='na'?'faint':c})"></em>${label}</div><div class="v gd-${c}">${x.displayValue||'—'}</div></div>`; };
+  // opportunities + diagnostics that are failing/warning, sorted by estimated savings
+  const auds=Object.values(a).filter(x=>x.score!=null&&x.score<0.9&&x.scoreDisplayMode!=='informative'&&x.scoreDisplayMode!=='notApplicable'&&x.title)
+    .map(x=>({t:x.title,s:x.score,ms:(x.details&&x.details.overallSavingsMs)||0,bytes:(x.details&&x.details.overallSavingsBytes)||0}))
+    .sort((p,q)=>(q.ms-p.ms)||(q.bytes-p.bytes)).slice(0,14);
+  const ic=s=>s>=0.9?'🟢':s>=0.5?'🟠':'🔴';
+  const sav=x=>x.ms>=100?`~${(x.ms/1000).toFixed(x.ms>=1000?1:2)}s`:x.bytes?`~${Math.round(x.bytes/1024)} KB`:'';
+  const shot=a['final-screenshot']&&a['final-screenshot'].details&&a['final-screenshot'].details.data;
+  let host=url; try{host=new URL(url).hostname;}catch(e){}
+  return `<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+      <div><b style="font-size:14px">${host}</b> <span style="color:var(--faint);font-size:12px">· ${labStrategy} · Lighthouse ${lh.lighthouseVersion||''}</span></div>
+      <span style="color:var(--faint);font-size:11px">${new Date(lh.fetchTime||Date.now()).toLocaleString()}</span>
+    </div>
+    <div class="lhcats">
+      ${ring(cats.performance,'Performance')}${ring(cats.accessibility,'Accessibility')}
+      ${ring(cats['best-practices'],'Best Practices')}${ring(cats.seo,'SEO')}
+    </div>
+    <div class="lhscale"><span><em style="background:var(--poor)"></em>0–49</span><span><em style="background:var(--warn)"></em>50–89</span><span><em style="background:var(--good)"></em>90–100</span></div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:14px">
+      <div style="flex:1;min-width:260px">
+        <div class="cwvother-h" style="margin:0 0 8px">Lab metrics</div>
+        <div class="lhmetrics">
+          ${met('first-contentful-paint','First Contentful Paint')}
+          ${met('largest-contentful-paint','Largest Contentful Paint')}
+          ${met('total-blocking-time','Total Blocking Time')}
+          ${met('cumulative-layout-shift','Cumulative Layout Shift')}
+          ${met('speed-index','Speed Index')}
+          ${met('interactive','Time to Interactive')}
+        </div>
+      </div>
+      ${shot?`<div style="width:200px"><div class="cwvother-h" style="margin:0 0 8px">Final render</div><img class="lhshot" src="${shot}" alt=""></div>`:''}
+    </div>
+    <div class="cwvother-h" style="margin:20px 0 4px">Top opportunities &amp; diagnostics</div>
+    <div class="lhaudits">
+      ${auds.length?auds.map(x=>`<div class="lhaudit"><span class="ic">${ic(x.s)}</span><span class="ttl">${x.t}</span><span class="sav">${sav(x)}</span></div>`).join('')
+        :'<div class="empty">No failing audits — nice.</div>'}
+    </div>
+    <p style="color:var(--faint);font-size:11px;margin-top:12px">Real Lighthouse run on Google’s servers via the PageSpeed Insights API — identical to what PageSpeed shows. Your <b>live</b> real-user vitals are on the Web Vitals tab.</p>
+  </div>`;
 }
 async function runWebScore(){
   const u1=document.getElementById('wsUrl').value.trim(), u2=document.getElementById('wsUrl2').value.trim();
@@ -1730,7 +1856,7 @@ function saveConfig(){
 // PERF: paint the shell immediately, then boot once the deferred libraries land.
 // (supabase-js / Chart.js are `defer`, so they execute before DOMContentLoaded.)
 function boot(){
-  buildNav();buildAudienceCards();initRangeBar();initTrendControls();initCwvDevice();initSB();
+  buildNav();buildAudienceCards();initRangeBar();initTrendControls();initCwvDevice();initLabStrategy();initSB();
   loadAll().then(subscribe);
 }
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',boot);
