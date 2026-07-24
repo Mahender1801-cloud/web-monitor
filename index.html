@@ -560,6 +560,12 @@ a{color:inherit}
 </div>
 <!-- raw modal -->
 <div class="modal-bg" id="rawModal"><div class="modal"><h3>Raw event</h3><pre id="rawPre"></pre><div style="text-align:right;margin-top:14px"><button class="btn" onclick="document.getElementById('rawModal').classList.remove('on')">Close</button></div></div></div>
+<!-- buyer page-by-page journey -->
+<div class="modal-bg" id="journeyModal"><div class="modal" style="max-width:640px">
+  <h3 id="jTitle">Buyer journey</h3>
+  <div id="jBody" style="max-height:66vh;overflow:auto;margin-top:6px"></div>
+  <div style="text-align:right;margin-top:14px"><button class="btn" onclick="document.getElementById('journeyModal').classList.remove('on')">Close</button></div>
+</div></div>
 
 <script>
 /* ============================ CONFIG ============================ */
@@ -917,7 +923,10 @@ function renderPurchases(){
     const dwell=seen.map(r=>r.time_on_page).filter(x=>x!=null).reduce((a,b)=>a+b,0);
     const dev=seen.length?cap(seen[0].device):null;
     const paths=[...new Set(seen.map(r=>r.path))];
-    const pagesTxt=paths.length?`${paths.length} page${paths.length>1?'s':''} · ${String(paths[0]).slice(0,22)}${paths.length>1?'…':''}`:'<span style="color:var(--faint)">not matched</span>';
+    const gid=p.ga_client_id||'';
+    const pagesTxt=gid
+      ? `<button class="raw-btn" onclick="showJourney('${gid}','${p.transaction_id||''}')">${paths.length||'view'} page${paths.length===1?'':'s'} →</button>`
+      : '<span style="color:var(--faint)">not matched</span>';
     return `<tr>
       <td class="mono" style="color:var(--faint)">${new Date(p.created_at).toLocaleString()}</td>
       <td class="mono" title="${p.transaction_id||''}">${String(p.transaction_id||'—').slice(0,16)}</td>
@@ -929,6 +938,43 @@ function renderPurchases(){
     </tr>`;
   }).join('');
   document.getElementById('buyNote').textContent=`${buys.length} order${buys.length>1?'s':''} · ${buys.filter(p=>p.ga_client_id&&byClient[p.ga_client_id]).length} matched to their browsing data`;
+}
+
+// Full page-by-page journey for one buyer, fetched fresh by GA client id (indexed,
+// cheap) so it is COMPLETE — not limited to the ~500 rows held in the browser.
+async function showJourney(gid, txn){
+  const modal=document.getElementById('journeyModal'), body=document.getElementById('jBody');
+  document.getElementById('jTitle').textContent='Buyer journey · order '+(txn||'');
+  body.innerHTML='<div class="empty">Loading their page-by-page path…</div>';
+  modal.classList.add('on');
+  if(!(LIVE&&sb)){ body.innerHTML='<div class="empty">Not connected.</div>'; return; }
+  try{
+    const {data,error}=await sb.from('rum_events')
+      .select('created_at,path,time_on_page,lcp,inp,cls,device,referrer')
+      .eq('ga_client_id',gid).order('created_at',{ascending:true}).limit(200);
+    if(error) throw error;
+    const rows=data||[];
+    if(!rows.length){ body.innerHTML='<div class="empty">No matched page views (the shopper likely blocked cookies).</div>'; return; }
+    const totMs=rows.reduce((a,r)=>a+(+r.time_on_page||0),0);
+    const first=new Date(rows[0].created_at), last=new Date(rows[rows.length-1].created_at);
+    const span=Math.max(0,(last-first)/1000);
+    let h=`<div style="font-size:12px;color:var(--muted);margin-bottom:10px">
+      ${rows.length} page views · engaged ${(totMs/1000).toFixed(0)}s · session span ${(span/60).toFixed(1)} min ·
+      ${rows[0].device||''} · from ${refShort(rows[0].referrer)}</div>`;
+    h+=`<table class="piv"><thead><tr><th>#</th><th>Time</th><th>Page</th><th class="m">On page</th><th class="m">LCP</th></tr></thead><tbody>`;
+    rows.forEach((r,i)=>{
+      const t=new Date(r.created_at).toLocaleTimeString();
+      const secs=r.time_on_page!=null?(r.time_on_page/1000).toFixed(1)+'s':'—';
+      const long=r.time_on_page>totMs/rows.length*1.5;      // highlight the pages they lingered on
+      h+=`<tr><td class="mono" style="color:var(--faint)">${i+1}</td>
+        <td class="mono" style="color:var(--faint)">${t}</td>
+        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.path||''}">${r.path||'/'}</td>
+        <td class="cell mono"${long?' style="font-weight:700"':''}>${secs}</td>
+        ${cellHTML('lcp',r.lcp==null?null:+r.lcp,fmtMs)}</tr>`;
+    });
+    h+='</tbody></table>';
+    body.innerHTML=h;
+  }catch(e){ body.innerHTML='<div class="empty">Could not load journey: '+e.message+'</div>'; }
 }
 
 /* ===================== DATA LOAD ==================
