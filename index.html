@@ -139,6 +139,33 @@ a{color:inherit}
 .wsmetrics{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-top:14px;font-size:12px}
 .wsmetrics .row{display:flex;justify-content:space-between;border-bottom:1px solid var(--line2);padding:5px 0}
 .wsmetrics .row span:last-child{font-family:'JetBrains Mono';font-weight:600}
+/* ---- PageSpeed-style Core Web Vitals assessment (live real-user data) ---- */
+.cwvcard{padding:18px 20px 20px}
+.cwvhead{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+.cwvhead h2{margin:0;font-family:'Space Grotesk';font-size:16px;font-weight:600}
+.cwvsub{color:var(--faint);font-size:12px;margin-top:3px}
+.cwvdev{margin-left:auto}
+.cwvassess{display:inline-flex;align-items:center;gap:9px;font-size:13px;font-weight:600;
+  padding:9px 14px;border-radius:9px;margin-bottom:18px}
+.cwvassess.pass{background:var(--good-bg);color:var(--good)}
+.cwvassess.fail{background:var(--poor-bg);color:var(--poor)}
+.cwvassess.none{background:var(--line2);color:var(--muted)}
+.cwvgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+.cwvgrid.other{grid-template-columns:repeat(2,1fr);max-width:66%}
+.cwvm .hd{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:600}
+.cwvm .dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.cwvm .val{font-family:'JetBrains Mono';font-size:26px;font-weight:600;margin:7px 0 9px;letter-spacing:-.02em}
+.cwvbar{display:flex;height:9px;border-radius:5px;overflow:hidden;background:var(--line2)}
+.cwvbar i{display:block;height:100%}
+.cwvlegend{display:flex;gap:12px;margin-top:7px;font-size:10.5px;color:var(--faint);flex-wrap:wrap}
+.cwvlegend span{display:inline-flex;align-items:center;gap:4px}
+.cwvlegend em{width:7px;height:7px;border-radius:2px;font-style:normal;display:inline-block}
+.cwvnote{color:var(--faint);font-size:11.5px;margin-top:16px;line-height:1.6}
+@media(max-width:820px){
+  .cwvgrid{grid-template-columns:1fr;gap:16px}
+  .cwvgrid.other{grid-template-columns:1fr;max-width:100%}
+  .cwvdev{margin-left:0;width:100%}
+}
 .savebtn{margin-top:9px}
 .savebtn.saved{border-color:var(--good);color:var(--good);background:var(--good-bg)}
 .gd-good{color:var(--good)}.gd-warn{color:var(--warn)}.gd-poor{color:var(--poor)}
@@ -334,7 +361,26 @@ a{color:inherit}
 
       <!-- WEB VITALS -->
       <section class="view" data-view="webvitals">
-        <!-- LIVE: real users, from the beacon -->
+        <!-- PageSpeed-style Core Web Vitals assessment, but from LIVE real users -->
+        <div class="card cwvcard">
+          <div class="cwvhead">
+            <div>
+              <h2>Discover what your real users are experiencing</h2>
+              <div class="cwvsub" id="cwvSub">live from your own visitors · not a 28-day average</div>
+            </div>
+            <div class="cwvdev">
+              <div class="segs sm" id="cwvDevice">
+                <button data-d="mobile" class="on">📱 Mobile</button><button data-d="desktop">🖥 Desktop</button><button data-d="">All</button>
+              </div>
+            </div>
+          </div>
+          <div class="cwvassess" id="cwvAssess"></div>
+          <div class="cwvgrid" id="cwvCore"></div>
+          <div class="cwvother-h">Other notable metrics</div>
+          <div class="cwvgrid other" id="cwvOther"></div>
+        </div>
+
+        <div class="section-h"><h2>Per-page breakdown</h2><span>p75 by page and device</span></div>
         <div class="toolbar">
           <span style="display:inline-flex;align-items:center;gap:7px;font-weight:600"><span class="pulse" style="animation-duration:2.4s"></span>Live · real users</span>
           <span style="color:var(--faint);font-size:12px">p75 from your own visitors (web-vitals beacon) · updates in real time</span>
@@ -598,7 +644,7 @@ function toggleSide(force){
 const TITLES={summary:['Summary','Real-user performance across the store'],webvitals:['Web Vitals','Live from your visitors · PageSpeed as cross-check'],live:['Live Data','Raw events streaming from real visitors'],purchases:['Purchases','Real orders · what each buyer actually experienced'],monitors:['Monitors','Per-page Web Vitals by device · 10-day daily sparklines'],webscore:['Web Score','Score & compare any URL — no PageSpeed API needed']};
 function setTitle(t,s){document.getElementById('vtitle').textContent=t;document.getElementById('vsub').textContent=s;}
 function showView(v){document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on', s.dataset.view===v));}
-function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='purchases')renderPurchases(); if(v==='monitors')renderMonitors(); if(v==='webscore')renderWebScore(); }
+function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderCWV();renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='purchases')renderPurchases(); if(v==='monitors')renderMonitors(); if(v==='webscore')renderWebScore(); }
 
 /* ===================== WEB SCORE (scores any URL via /api/score, no PSI API) === */
 const scoreColor=s=>s==null?'na':(s>=90?'good':s>=50?'warn':'poor');
@@ -1299,7 +1345,7 @@ function renderAudience(rows,S){
 function refreshAudienceSoon(){ /* intentionally a no-op — see DB-LOAD BUDGET above */ }
 let sumTimer; function renderSummarySoon(){clearTimeout(sumTimer);sumTimer=setTimeout(()=>{if(curView==='summary')renderSummary();},1200);}
 let liveTimer; function renderLiveSoon(){clearTimeout(liveTimer);liveTimer=setTimeout(()=>{if(curView==='live')renderLive();},700);}
-let wvTimer;   function renderWVLiveSoon(){clearTimeout(wvTimer);wvTimer=setTimeout(()=>{if(curView==='webvitals')renderWVLive();},900);}
+let wvTimer;   function renderWVLiveSoon(){clearTimeout(wvTimer);wvTimer=setTimeout(()=>{if(curView==='webvitals'){renderCWV();renderWVLive();}},900);}
 /* ---- Pivot report: a dimension (device/os/net/ref) broken down by page group ---- */
 function pageGroup(p){p=p||'/';if(p==='/'||p==='')return 'Homepage';if(p.startsWith('/collections'))return 'Collections';if(p.startsWith('/products'))return 'Products';if(p.startsWith('/cart'))return 'Cart';if(p.startsWith('/pages'))return 'Pages';if(p.startsWith('/apps'))return 'Apps';return 'Other';}
 function dimValue(r,dim){
@@ -1344,6 +1390,78 @@ function baseOpts(unit){return{plugins:{legend:{display:false},tooltip:{intersec
 
 /* ===================== WEB VITALS TABLE ================== */
 /* LIVE, real users — the actual live tracker, built from the beacon (RUM). */
+/* ---- PageSpeed-style Core Web Vitals assessment, from LIVE real users ----
+   Same layout Google shows (assessment verdict + p75 + good/needs-improvement/poor
+   distribution bars), but sourced from this store's own beacon rather than CrUX —
+   so it is real-time instead of a 28-day rolling average.                        */
+let cwvDevice='mobile';
+const CWV_DEFS={
+  lcp :{label:'Largest Contentful Paint (LCP)',good:2500,poor:4000,fmt:fmtMs,core:1},
+  inp :{label:'Interaction to Next Paint (INP)',good:200, poor:500, fmt:fmtMs,core:1},
+  cls :{label:'Cumulative Layout Shift (CLS)', good:0.1,  poor:0.25,fmt:fmtCls,core:1},
+  fcp :{label:'First Contentful Paint (FCP)',  good:1800, poor:3000,fmt:fmtMs},
+  ttfb:{label:'Time to First Byte (TTFB)',     good:800,  poor:1800,fmt:fmtMs},
+};
+const fetchCwv=(f,t,dev)=>cachedRpc('dash_cwv',
+  {p_from:iso(f),p_to:iso(t),p_device:dev||null,p_path:null},'cwv_'+f+'_'+t+'_'+(dev||'all'));
+
+function cwvMetricHTML(key,m){
+  const D=CWV_DEFS[key];
+  if(!m||!m.n){ return `<div class="cwvm"><div class="hd"><span class="dot" style="background:var(--line)"></span>${D.label}</div>
+    <div class="val" style="color:var(--faint)">—</div>
+    <div class="cwvbar"></div><div class="cwvlegend">no data in this range</div></div>`; }
+  const p75v=m.p75==null?null:+m.p75;
+  const rt=p75v==null?'na':(p75v<=D.good?'good':p75v<=D.poor?'warn':'poor');
+  const col=rt==='good'?'var(--good)':rt==='warn'?'var(--warn)':rt==='poor'?'var(--poor)':'var(--faint)';
+  const n=+m.n||1, g=+m.good||0, ni=+m.ni||0, p=+m.poor||0;
+  const pc=x=>Math.round(x/n*100);
+  return `<div class="cwvm">
+    <div class="hd"><span class="dot" style="background:${col}"></span>${D.label}</div>
+    <div class="val" style="color:${col}">${D.fmt(p75v)}</div>
+    <div class="cwvbar">
+      <i style="width:${pc(g)}%;background:var(--good)"></i>
+      <i style="width:${pc(ni)}%;background:var(--warn)"></i>
+      <i style="width:${pc(p)}%;background:var(--poor)"></i>
+    </div>
+    <div class="cwvlegend">
+      <span><em style="background:var(--good)"></em>Good ${pc(g)}%</span>
+      <span><em style="background:var(--warn)"></em>Needs work ${pc(ni)}%</span>
+      <span><em style="background:var(--poor)"></em>Poor ${pc(p)}%</span>
+      <span style="margin-left:auto">${n.toLocaleString()} samples</span>
+    </div></div>`;
+}
+function renderCWV(){
+  const cur=windowRange();
+  const core=document.getElementById('cwvCore'), other=document.getElementById('cwvOther'),
+        assess=document.getElementById('cwvAssess'), sub=document.getElementById('cwvSub');
+  if(!core) return;
+  fetchCwv(cur.from,cur.to,cwvDevice).then(C=>{
+    if(!C){
+      assess.className='cwvassess none'; assess.textContent='Run dash_tables.sql in Supabase to enable this report';
+      core.innerHTML=''; other.innerHTML=''; return;
+    }
+    // Google's rule: the assessment passes only if LCP, INP and CLS p75 are all "good".
+    const verdicts=['lcp','inp','cls'].map(k=>{const m=C[k];
+      if(!m||m.p75==null) return null; return (+m.p75)<=CWV_DEFS[k].good; });
+    const known=verdicts.filter(v=>v!==null);
+    const passed=known.length===3 && known.every(Boolean);
+    assess.className='cwvassess '+(known.length<3?'none':passed?'pass':'fail');
+    assess.innerHTML= known.length<3
+      ? `⏳ Core Web Vitals Assessment: <b>not enough data</b>`
+      : (passed ? `✓ Core Web Vitals Assessment: <b>Passed</b>` : `✕ Core Web Vitals Assessment: <b>Failed</b>`);
+    core.innerHTML=['lcp','inp','cls'].map(k=>cwvMetricHTML(k,C[k])).join('');
+    other.innerHTML=['fcp','ttfb'].map(k=>cwvMetricHTML(k,C[k])).join('');
+    sub.textContent=`live from your own visitors · ${(+C.total||0).toLocaleString()} page views in ${cur.label}`
+      +(cwvDevice?` · ${cwvDevice}`:' · all devices');
+  });
+}
+function initCwvDevice(){
+  document.querySelectorAll('#cwvDevice button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('#cwvDevice button').forEach(x=>x.classList.toggle('on',x===b));
+    cwvDevice=b.dataset.d; renderCWV();
+  });
+}
+
 // Per-page p75 over the WHOLE selected window, aggregated by Postgres (dash_pages).
 // Previously grouped DATA.rum in the browser, which only held ~500 rows — that is why
 // every page showed 1-2 views instead of real traffic.
@@ -1612,7 +1730,7 @@ function saveConfig(){
 // PERF: paint the shell immediately, then boot once the deferred libraries land.
 // (supabase-js / Chart.js are `defer`, so they execute before DOMContentLoaded.)
 function boot(){
-  buildNav();buildAudienceCards();initRangeBar();initTrendControls();initSB();
+  buildNav();buildAudienceCards();initRangeBar();initTrendControls();initCwvDevice();initSB();
   loadAll().then(subscribe);
 }
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',boot);

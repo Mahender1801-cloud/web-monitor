@@ -124,9 +124,64 @@ end;
 $$;
 grant execute on function public.dash_page_daily(timestamptz, timestamptz, int) to anon;
 
+-- ---------------------------------------------------------------------------
+-- 4) CORE WEB VITALS ASSESSMENT — the PageSpeed-style report, but from LIVE
+--    real users instead of CrUX's 28-day rolling average.
+--    Returns p75 AND the good / needs-improvement / poor distribution per metric,
+--    which is what draws the coloured bars.
+--    p_device: 'mobile' | 'desktop' | null (all)   p_path: exact path | null (all)
+-- ---------------------------------------------------------------------------
+create or replace function public.dash_cwv(
+  p_from timestamptz, p_to timestamptz, p_device text default null, p_path text default null
+) returns json language plpgsql stable
+set statement_timeout = '20s'
+as $$
+declare result json;
+begin
+  with w as materialized (
+    select lcp, inp, cls, fcp, ttfb
+    from public.rum_events
+    where created_at >= p_from and created_at <= p_to
+      and (p_device is null or device = p_device)
+      and (p_path   is null or path   = p_path)
+  )
+  select json_build_object(
+    'total', (select count(*) from w),
+    'lcp', (select json_build_object('p75',percentile_cont(0.75) within group (order by lcp),
+              'n',count(lcp),
+              'good',count(*) filter (where lcp <= 2500),
+              'ni',  count(*) filter (where lcp >  2500 and lcp <= 4000),
+              'poor',count(*) filter (where lcp >  4000)) from w where lcp is not null),
+    'inp', (select json_build_object('p75',percentile_cont(0.75) within group (order by inp),
+              'n',count(inp),
+              'good',count(*) filter (where inp <= 200),
+              'ni',  count(*) filter (where inp >  200 and inp <= 500),
+              'poor',count(*) filter (where inp >  500)) from w where inp is not null),
+    'cls', (select json_build_object('p75',percentile_cont(0.75) within group (order by cls),
+              'n',count(cls),
+              'good',count(*) filter (where cls <= 0.1),
+              'ni',  count(*) filter (where cls >  0.1 and cls <= 0.25),
+              'poor',count(*) filter (where cls >  0.25)) from w where cls is not null),
+    'fcp', (select json_build_object('p75',percentile_cont(0.75) within group (order by fcp),
+              'n',count(fcp),
+              'good',count(*) filter (where fcp <= 1800),
+              'ni',  count(*) filter (where fcp >  1800 and fcp <= 3000),
+              'poor',count(*) filter (where fcp >  3000)) from w where fcp is not null),
+    'ttfb',(select json_build_object('p75',percentile_cont(0.75) within group (order by ttfb),
+              'n',count(ttfb),
+              'good',count(*) filter (where ttfb <= 800),
+              'ni',  count(*) filter (where ttfb >  800 and ttfb <= 1800),
+              'poor',count(*) filter (where ttfb >  1800)) from w where ttfb is not null)
+  ) into result;
+  return result;
+end;
+$$;
+grant execute on function public.dash_cwv(timestamptz, timestamptz, text, text) to anon;
+
 analyze public.rum_events;
 
 -- Verify:
 --   select public.dash_pivot(now() - interval '7 days', now());
 --   select public.dash_pages(now() - interval '7 days', now());
 --   select public.dash_page_daily(now() - interval '10 days', now());
+--   select public.dash_cwv(now() - interval '7 days', now(), 'mobile');
