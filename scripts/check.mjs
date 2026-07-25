@@ -20,8 +20,10 @@ const RUN_TYPE      = process.env.RUN_TYPE || 'scheduled';
 const GA_PROPERTY_ID = process.env.GA_PROPERTY_ID || '';
 const GA_SA_KEY      = process.env.GA_SA_KEY || '';
 // Shopify Admin API (optional — the reliable, 100% order feed; skipped if unset)
-const SHOPIFY_STORE  = process.env.SHOPIFY_STORE || '';   // e.g. c6c623-3.myshopify.com
-const SHOPIFY_TOKEN  = process.env.SHOPIFY_TOKEN || '';   // Admin API access token (read_orders)
+const SHOPIFY_STORE  = process.env.SHOPIFY_STORE || '';        // e.g. c6c623-3.myshopify.com
+const SHOPIFY_TOKEN  = process.env.SHOPIFY_TOKEN || '';        // legacy custom-app token (optional)
+const SHOPIFY_CLIENT_ID     = process.env.SHOPIFY_CLIENT_ID || '';     // Dev-Dashboard app Client ID
+const SHOPIFY_CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET || ''; // Dev-Dashboard app Secret
 const SHOPIFY_BACKFILL_DAYS = +(process.env.SHOPIFY_BACKFILL_DAYS || 0); // one-time deep pull
 
 if (!SUPABASE_URL || !SERVICE_KEY) {
@@ -140,14 +142,38 @@ async function pullGA() {
 
 // ---- Shopify Admin API (the reliable order feed) ---------------------------
 // The browser checkout_completed pixel captures <1% of orders. This pulls EVERY
-// order server-side, cursor-paginated, and upserts into shop_orders. Incremental
-// by default (only orders newer than the latest we have, with a small overlap so
-// nothing slips through); set SHOPIFY_BACKFILL_DAYS once for a deep historical pull.
+// order server-side and upserts into shop_orders. Incremental by default (only
+// orders newer than the latest we have, with a small overlap so nothing slips
+// through); set SHOPIFY_BACKFILL_DAYS once for a deep historical pull.
+//
+// Auth: Dev-Dashboard apps use the CLIENT-CREDENTIALS grant — POST the app's
+// Client ID + Secret to /admin/oauth/access_token and get a 24h token. We request
+// a fresh one each run, so there's no long-lived token to store or rotate. (If a
+// legacy SHOPIFY_TOKEN is provided instead, we use it directly.) The app must be
+// installed on the store with the read_orders scope.
+async function shopifyToken() {
+  if (SHOPIFY_TOKEN) return SHOPIFY_TOKEN;                 // legacy custom-app token, if set
+  if (!SHOPIFY_CLIENT_ID || !SHOPIFY_CLIENT_SECRET) return null;
+  const r = await fetch(`https://${SHOPIFY_STORE}/admin/oauth/access_token`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client_id: SHOPIFY_CLIENT_ID, client_secret: SHOPIFY_CLIENT_SECRET, grant_type: 'client_credentials' }),
+    signal: AbortSignal.timeout(30000)
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!j.access_token) throw new Error('client_credentials failed: ' + JSON.stringify(j).slice(0, 200));
+  return j.access_token;
+}
+
 async function pullShopify() {
-  if (!SHOPIFY_STORE || !SHOPIFY_TOKEN) { console.log('Shopify not configured (SHOPIFY_STORE / SHOPIFY_TOKEN) — skipping.'); return; }
-  const API = '2024-10';
-  const base = `https://${SHOPIFY_STORE}/admin/api/${API}`;
-  const shH = { 'X-Shopify-Access-Token': SHOPIFY_TOKEN, 'Content-Type': 'application/json' };
+  if (!SHOPIFY_STORE || (!SHOPIFY_TOKEN && !(SHOPIFY_CLIENT_ID && SHOPIFY_CLIENT_SECRET))) {
+    console.log('Shopify not configured (SHOPIFY_STORE + SHOPIFY_CLIENT_ID/SECRET, or SHOPIFY_TOKEN) — skipping.'); return;
+  }
+  let token; try { token = await shopifyToken(); } catch (e) { console.error('Shopify auth failed:', e.message); return; }
+  if (!token) { console.log('Shopify: no token — skipping.'); return; }
+
+  const API = '2025-01';
+  const gqlUrl = `https://${SHOPIFY_STORE}/admin/api/${API}/graphql.json`;
+  const shH = { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' };
 
   // Where to start: the deep backfill window if requested, else just after our newest row.
   let sinceISO;
@@ -161,45 +187,53 @@ async function pullShopify() {
       : new Date(Date.now() - 30 * 864e5).toISOString();                              // first run: 30 days
   }
 
-  const first = new URL(`${base}/orders.json`);
-  first.searchParams.set('status', 'any');
-  first.searchParams.set('limit', '250');
-  first.searchParams.set('created_at_min', sinceISO);
-  first.searchParams.set('fields', 'id,name,created_at,processed_at,current_total_price,total_price,currency,financial_status,line_items,landing_site,referring_site,source_name');
+  const query = `query($cursor: String, $q: String!) {
+    orders(first: 100, after: $cursor, query: $q, sortKey: CREATED_AT) {
+      edges { node {
+        id name createdAt processedAt displayFinancialStatus
+        currentTotalPriceSet { shopMoney { amount currencyCode } }
+        subtotalLineItemsQuantity
+        landingPageUrl referrerUrl sourceName
+      } }
+      pageInfo { hasNextPage endCursor }
+    }
+  }`;
+  const q = `created_at:>='${sinceISO}'`;
+  const numId = gid => { const m = String(gid).match(/(\d+)$/); return m ? +m[1] : null; };
 
-  let url = first.toString(), pages = 0, total = 0;
+  let cursor = null, pages = 0, total = 0;
   try {
-    while (url && pages < 200) {
-      const r = await fetch(url, { headers: shH, signal: AbortSignal.timeout(60000) });
-      if (r.status === 429) { await sleep(2500); continue; }        // throttled — wait and retry same url
-      if (!r.ok) { console.error('Shopify orders', r.status, (await r.text()).slice(0, 200)); break; }
+    do {
+      const r = await fetch(gqlUrl, { method: 'POST', headers: shH, signal: AbortSignal.timeout(60000),
+        body: JSON.stringify({ query, variables: { cursor, q } }) });
+      if (r.status === 429) { await sleep(2500); continue; }      // throttled — retry same cursor
+      if (!r.ok) { console.error('Shopify GraphQL', r.status, (await r.text()).slice(0, 200)); break; }
       const j = await r.json();
-      const orders = j.orders || [];
-      if (orders.length) {
-        const rows = orders.map(o => ({
-          id: o.id,
+      if (j.errors) { console.error('Shopify GraphQL errors:', JSON.stringify(j.errors).slice(0, 300)); break; }
+      const conn = j.data?.orders;
+      const edges = conn?.edges || [];
+      if (edges.length) {
+        const rows = edges.map(({ node: o }) => ({
+          id: numId(o.id),
           order_number: o.name,
-          created_at: o.created_at,
-          processed_at: o.processed_at,
-          total_price: +(o.current_total_price ?? o.total_price ?? 0),
-          currency: o.currency,
-          items: (o.line_items || []).reduce((a, li) => a + (+li.quantity || 0), 0),
-          financial_status: o.financial_status,
-          landing_site: (o.landing_site || '').split('?')[0].slice(0, 300),
-          referring_site: (o.referring_site || '').slice(0, 300),
-          source_name: o.source_name,
+          created_at: o.createdAt,
+          processed_at: o.processedAt,
+          total_price: +(o.currentTotalPriceSet?.shopMoney?.amount ?? 0),
+          currency: o.currentTotalPriceSet?.shopMoney?.currencyCode || null,
+          items: o.subtotalLineItemsQuantity ?? null,
+          financial_status: (o.displayFinancialStatus || '').toLowerCase(),
+          landing_site: (o.landingPageUrl || '').split('?')[0].slice(0, 300),
+          referring_site: (o.referrerUrl || '').slice(0, 300),
+          source_name: o.sourceName,
           raw: { fetchedAt: new Date().toISOString() }
-        }));
+        })).filter(x => x.id != null);
         await sbUpsert('shop_orders', rows, 'id');
         total += rows.length;
       }
       pages++;
-      // cursor pagination: follow the rel="next" Link header
-      const link = r.headers.get('link') || '';
-      const next = link.split(',').find(s => s.includes('rel="next"'));
-      url = next ? next.slice(next.indexOf('<') + 1, next.indexOf('>')) : null;
-      if (url) await sleep(600); // stay under 2 req/s
-    }
+      cursor = conn?.pageInfo?.hasNextPage ? conn.pageInfo.endCursor : null;
+      if (cursor) await sleep(700);   // GraphQL cost-based throttle — stay comfortable
+    } while (cursor && pages < 300);
     console.log(`Shopify: upserted ${total} orders across ${pages} page(s) since ${sinceISO.slice(0, 10)}.`);
   } catch (e) { console.error('Shopify pull failed:', e.message); }
 }
