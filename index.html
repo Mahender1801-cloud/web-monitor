@@ -890,17 +890,25 @@ function renderPurchases(){
   // captures <1% of orders, so it must never drive the counts. Paint a placeholder,
   // then fill in when the server total returns. Pixel `buys` = the linked subset.
   const paintTiles=(s)=>{
-    const orders = s? s.orders : null;
-    const revenue = s? +s.revenue : buys.reduce((a,p)=>a+(+p.value||0),0);
-    const aov = s? (s.aov==null?null:+s.aov) : (buys.length?revenue/buys.length:null);
     const el=document.getElementById('buyTiles'); if(!el) return;
-    el.innerHTML=[
-      ['Orders', orders==null?'…':orders.toLocaleString(), s?cur.label:'Shopify feed — run shopify_orders.sql'],
-      ['Revenue', s?money(revenue):'…', cur.label],
-      ['Avg order value', s?money(aov):'…', orders?`${orders.toLocaleString()} orders`:'—'],
-      ['Linked to browsing', `${buys.length.toLocaleString()}${orders?` / ${orders.toLocaleString()}`:''}`,
-        'orders carrying page-speed data'],
-    ].map(([h,v,sub])=>`<div class="card"><h3>${h}</h3><div class="metric" style="color:var(--ink)">${v}</div><div class="metric-sub">${sub}</div></div>`).join('');
+    // s === null  -> still loading / table not created yet
+    // s.orders===0 -> table exists but empty (Shopify feed not flowing: PCD access pending)
+    const loading = !s;
+    const pending = s && (s.orders==null || s.orders===0);
+    const rows = (loading || pending)
+      ? [
+          ['Orders', loading?'…':'—', pending?'awaiting Shopify order access':'run shopify_orders.sql'],
+          ['Revenue', loading?'…':'—', pending?'connects once approved':cur.label],
+          ['Avg order value', loading?'…':'—', '—'],
+          ['Linked to browsing', buys.length.toLocaleString(), 'orders with page-speed data (pixel)'],
+        ]
+      : [
+          ['Orders', s.orders.toLocaleString(), cur.label],
+          ['Revenue', money(+s.revenue), cur.label],
+          ['Avg order value', money(s.aov==null?null:+s.aov), `${s.orders.toLocaleString()} orders`],
+          ['Linked to browsing', `${buys.length.toLocaleString()} / ${s.orders.toLocaleString()}`, 'orders carrying page-speed data'],
+        ];
+    el.innerHTML=rows.map(([h,v,sub])=>`<div class="card"><h3>${h}</h3><div class="metric" style="color:var(--ink)">${v}</div><div class="metric-sub">${sub}</div></div>`).join('');
   };
   paintTiles(null);
   fetchShopStats(cur.from,cur.to).then(s=>{ if(s) paintTiles(s); });
