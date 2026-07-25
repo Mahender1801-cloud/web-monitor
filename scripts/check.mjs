@@ -187,13 +187,15 @@ async function pullShopify() {
       : new Date(Date.now() - 30 * 864e5).toISOString();                              // first run: 30 days
   }
 
+  // NOTE: landingPageUrl / referrerUrl / sourceName are customer-attribution fields
+  // that Shopify gates behind Protected Customer Data access. The core order fields
+  // below need only `read_orders` (no PCD), so we omit those three to avoid ACCESS_DENIED.
   const query = `query($cursor: String, $q: String!) {
     orders(first: 100, after: $cursor, query: $q, sortKey: CREATED_AT) {
       edges { node {
         id name createdAt processedAt displayFinancialStatus
         currentTotalPriceSet { shopMoney { amount currencyCode } }
         subtotalLineItemsQuantity
-        landingPageUrl referrerUrl sourceName
       } }
       pageInfo { hasNextPage endCursor }
     }
@@ -222,9 +224,9 @@ async function pullShopify() {
           currency: o.currentTotalPriceSet?.shopMoney?.currencyCode || null,
           items: o.subtotalLineItemsQuantity ?? null,
           financial_status: (o.displayFinancialStatus || '').toLowerCase(),
-          landing_site: (o.landingPageUrl || '').split('?')[0].slice(0, 300),
-          referring_site: (o.referrerUrl || '').slice(0, 300),
-          source_name: o.sourceName,
+          landing_site: null,      // omitted — customer-attribution field needs PCD access
+          referring_site: null,    // omitted — customer-attribution field needs PCD access
+          source_name: null,       // omitted — needs PCD access
           raw: { fetchedAt: new Date().toISOString() }
         })).filter(x => x.id != null);
         await sbUpsert('shop_orders', rows, 'id');
