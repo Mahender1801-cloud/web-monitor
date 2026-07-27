@@ -3,11 +3,18 @@ import { onLCP, onCLS, onINP, onFCP, onTTFB }
 
 const SUPABASE_URL      = 'https://ijzudvwhzsnwysucyves.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlqenVkdndoenNud3lzdWN5dmVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5MzA1MDYsImV4cCI6MjA5OTUwNjUwNn0.i59l07obJhiKt-RND4FEsETKpVUsvQiVGYxDYt5K0Cw';
-const ENDPOINT = SUPABASE_URL + '/rest/v1/rum_events';
+const ENDPOINT      = SUPABASE_URL + '/rest/v1/rum_events';
+const FUNNEL_ENDPOINT = SUPABASE_URL + '/rest/v1/funnel_events';
 
 const ua = navigator.userAgent;
 const round = n => (typeof n === 'number' ? Math.round(n) : null);
-const sessionId = (crypto.randomUUID && crypto.randomUUID()) || (Date.now() + '-' + Math.random());
+// One id per browser tab visit, reused across pages in the same visit (sessionStorage),
+// so a whole browsing journey shares one session_id — that's what links pages together
+// AND links the eventual order back to this journey (see stampCart()).
+const sessionId = (() => {
+  try { let s = sessionStorage.getItem('_rum_sid'); if (!s) { s = (crypto.randomUUID && crypto.randomUUID()) || (Date.now() + '-' + Math.random()); sessionStorage.setItem('_rum_sid', s); } return s; }
+  catch { return (crypto.randomUUID && crypto.randomUUID()) || (Date.now() + '-' + Math.random()); }
+})();
 
 // marketing attribution + device context (needs the extra columns from apply_all.sql)
 const qp = new URLSearchParams(location.search);
@@ -16,10 +23,7 @@ const screenSize = (screen && screen.width) ? (screen.width + 'x' + screen.heigh
 const lang = navigator.language || null;
 
 // Google Analytics link (needs the ga_* columns from ga_fix.sql).
-// _ga            = GA1.1.<clientId>       -> GA4's per-browser user id
-// _ga_NG5J2LV3F5 = GS1.1.<sessionId>.<n>  -> GA4's session id for this visit
-// Storing these lets us match a slow page view here to the same user in GA4.
-const cookie = n => { const m = document.cookie.match('(^|;)\\s*' + n + '\\s*=\\s*([^;]+)'); return m ? m.pop() : ''; };
+const cookie = n => { const mm = document.cookie.match('(^|;)\\s*' + n + '\\s*=\\s*([^;]+)'); return mm ? mm.pop() : ''; };
 const gaClientId = (cookie('_ga').split('.').slice(-2).join('.')) || null;
 const gaSessionId = (cookie('_ga_NG5J2LV3F5').split('.')[2]) || null;
 
@@ -33,9 +37,7 @@ const os = /Windows/.test(ua) ? 'Windows' : /Android/.test(ua) ? 'Android'
 const m = {};                 // collected metrics keyed by name
 let sent = false;
 
-// ---- Time on page: accumulate only VISIBLE time, so a tab left open in the
-// background doesn't inflate it. Correct regardless of listener order, because
-// payload() adds the still-running segment itself.
+// ---- Time on page: accumulate only VISIBLE time ----------------------------
 let engagedMs = 0;
 let visStart = (document.visibilityState === 'visible') ? performance.now() : null;
 let interacted = false;
@@ -47,6 +49,62 @@ addEventListener('visibilitychange', () => {
 ['click', 'keydown', 'scroll'].forEach(e =>
   addEventListener(e, () => { interacted = true; }, { once: true, passive: true }));
 function timeOnPage() { return Math.round(engagedMs + (visStart !== null ? performance.now() - visStart : 0)); }
+
+// ============================================================================
+// CART STAMP — write our session id (and GA id) into the Shopify cart, so when
+// this shopper checks out, the ORDER carries the id. That's what lets us link
+// EVERY order back to its full page-by-page journey server-side (via the webhook),
+// even when the consent-gated checkout pixel never fires. Runs once per visit.
+// ============================================================================
+function stampCart(force) {
+  try {
+    if (!force && sessionStorage.getItem('_rum_stamped')) return;
+    fetch('/cart/update.js', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ attributes: { _rum_sid: sessionId, _rum_gid: gaClientId || '' } })
+    }).then(() => { try { sessionStorage.setItem('_rum_stamped', '1'); } catch {} }).catch(() => {});
+  } catch {}
+}
+stampCart();
+
+// ============================================================================
+// FUNNEL EVENTS — a light beacon for the steps that aren't page views
+// (add_to_cart, checkout intent). Page-view steps (product viewed, cart viewed)
+// already come from rum_events paths. Stored in funnel_events (see SQL).
+// ============================================================================
+function sendEvent(type) {
+  try {
+    fetch(FUNNEL_ENDPOINT, {
+      method: 'POST', keepalive: true,
+      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY,
+                 'Authorization': 'Bearer ' + SUPABASE_ANON_KEY, 'Prefer': 'return=minimal' },
+      body: JSON.stringify({ session_id: sessionId, event_type: type, path: location.pathname,
+                             ga_client_id: gaClientId, referrer: document.referrer || '' })
+    }).catch(() => {});
+  } catch {}
+}
+
+// Detect add-to-cart on AJAX themes by watching calls to /cart/add(.js).
+const _fetch = window.fetch;
+window.fetch = function (...args) {
+  try {
+    const u = (args[0] && args[0].url) || args[0] || '';
+    if (/\/cart\/add(\.js)?/.test(String(u))) { sendEvent('add_to_cart'); stampCart(true); }
+  } catch {}
+  return _fetch.apply(this, args);
+};
+const _open = XMLHttpRequest.prototype.open;
+XMLHttpRequest.prototype.open = function (method, url) {
+  try { if (/\/cart\/add(\.js)?/.test(String(url))) this.addEventListener('load', () => { sendEvent('add_to_cart'); stampCart(true); }); } catch {}
+  return _open.apply(this, arguments);
+};
+// Non-AJAX add-to-cart forms + checkout intent (click on a checkout control).
+addEventListener('submit', (e) => {
+  try { const f = e.target; if (f && /\/cart\/add/.test(f.action || '')) { sendEvent('add_to_cart'); stampCart(true); } } catch {}
+}, { passive: true });
+addEventListener('click', (e) => {
+  try { if (e.target.closest('[name="checkout"],[href*="/checkout"],button[value="Checkout"]')) sendEvent('checkout_click'); } catch {}
+}, { passive: true });
 
 function record(metric) {
   const a = metric.attribution || {};
@@ -113,11 +171,6 @@ function flush() {
 
 onLCP(record); onCLS(record); onINP(record); onFCP(record); onTTFB(record);
 
-// LCP/CLS/INP are only FINAL when the page is hidden, and dwell time isn't known
-// until then either — so the real send happens here. (An earlier 8s timer sent
-// early, which capped every time_on_page at 8s and truncated INP/CLS.)
 addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
 addEventListener('pagehide', flush);
-// Long-stop insurance only: catches a session the browser never hides/unloads.
-// Deliberately long so it does not cap normal dwell times.
-setTimeout(flush, 600000);   // 10 min
+setTimeout(flush, 600000);   // 10 min long-stop

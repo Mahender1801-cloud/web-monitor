@@ -460,14 +460,11 @@ a{color:inherit}
       <!-- PURCHASES -->
       <section class="view" data-view="purchases">
         <div class="grid g4" id="buyTiles"></div>
-        <div class="section-h"><h2>Did speed cost the sale?</h2><span>buyers vs non-buyers · same window as Summary</span></div>
+        <div class="section-h"><h2>Conversion funnel</h2><span>how many visitors reach each step · same window</span></div>
+        <div id="funnelBox" style="margin-bottom:8px"></div>
+        <div class="section-h"><h2>Recent orders</h2><span id="buyNote">every order · click "journey" to see the pages they saw before buying</span></div>
         <div class="wv"><table>
-          <thead><tr><th>Visitor group</th><th class="m">Visitors</th><th class="m">Buyers</th><th class="m">Conv. rate</th><th class="m">LCP p75</th><th class="m">Avg time on page</th></tr></thead>
-          <tbody id="speedVsConv"></tbody>
-        </table></div>
-        <div class="section-h"><h2>Recent orders — linked to browsing</h2><span id="buyNote">the subset of orders that carry page-speed data</span></div>
-        <div class="wv"><table>
-          <thead><tr><th>When</th><th>Transaction ID</th><th class="m">Value</th><th class="m">Device</th><th>Pages seen</th><th class="m">Their LCP</th><th class="m">Time on site</th></tr></thead>
+          <thead><tr><th>When</th><th>Order</th><th class="m">Value</th><th class="m">Items</th><th class="m">Status</th><th>Journey (pages seen)</th></tr></thead>
           <tbody id="buyBody"></tbody>
         </table></div>
         <p style="color:var(--faint);font-size:11.5px;margin-top:12px">
@@ -651,7 +648,7 @@ const SAMPLE_ITEMS=[
 ].map((r,i)=>({id:'i'+i,category:r[0],item:r[1],check_type:r[2],auto_key:r[3],sort:i}));
 
 /* ===================== STATE ================== */
-let DATA={ rum:[], psi:[], monitors:[], items:[], checks:[], purchases:[], webscores:[] };
+let DATA={ rum:[], psi:[], monitors:[], items:[], checks:[], purchases:[], webscores:[], shopOrders:[] };
 let curView='summary', curCat=null, charts={};
 
 /* ===================== NAV ================== */
@@ -913,56 +910,64 @@ function renderPurchases(){
   paintTiles(null);
   fetchShopStats(cur.from,cur.to).then(s=>{ if(s) paintTiles(s); });
 
-  // fast vs slow: did speed cost the sale?
-  const groups=[['Fast (LCP ≤ 2.5s)',r=>r.lcp!=null&&r.lcp<=2500],['Needs work (2.5–4s)',r=>r.lcp!=null&&r.lcp>2500&&r.lcp<=4000],['Slow (LCP > 4s)',r=>r.lcp!=null&&r.lcp>4000]];
-  document.getElementById('speedVsConv').innerHTML=groups.map(([label,test])=>{
-    const ids=Object.keys(byClient).filter(id=>byClient[id].some(test));
-    const bought=ids.filter(id=>buyerIds.has(id)).length;
-    const rate=ids.length?(bought/ids.length*100):null;
-    const lcps=[].concat(...ids.map(id=>byClient[id].map(r=>r.lcp)));
-    const dwell=[].concat(...ids.map(id=>byClient[id].map(r=>r.time_on_page))).filter(x=>x!=null);
-    const avgD=dwell.length?dwell.reduce((a,b)=>a+b,0)/dwell.length:null;
-    const rt=rate==null?'na':(rate>=2?'good':rate>=1?'warn':'poor');
-    return `<tr><td class="pg">${label}</td>
-      <td class="cell mono">${ids.length.toLocaleString()}</td>
-      <td class="cell mono">${bought}</td>
-      <td class="cell"><span class="cellval ${rt}">${rate==null?'—':rate.toFixed(2)+'%'}</span></td>
-      ${cellHTML('lcp',p75(lcps),fmtMs)}
-      <td class="cell mono">${avgD==null?'—':(avgD/1000).toFixed(1)+'s'}</td></tr>`;
-  }).join('')||'<tr><td colspan=6 class="empty">No data in this range</td></tr>';
+  // conversion funnel — sessions reaching each step (server-side funnel_stats)
+  paintFunnel(null);
+  fetchFunnel(cur.from,cur.to).then(f=>paintFunnel(f));
 
-  // recent orders, joined to what that buyer saw
+  // recent orders from the real Shopify feed, each linkable to its browsing journey
   const body=document.getElementById('buyBody');
-  if(!buys.length){
-    body.innerHTML='<tr><td colspan=7 class="empty">No orders in this range yet — the Shopify pixel records your next checkout automatically.</td></tr>';
+  const ords=(DATA.shopOrders||[]).filter(o=>{const t=+new Date(o.created_at);return t>=cur.from&&t<=cur.to;});
+  if(!ords.length){
+    body.innerHTML='<tr><td colspan=6 class="empty">No orders in this range yet.</td></tr>';
+    document.getElementById('buyNote').textContent='every order · click "journey" to see the pages they saw before buying';
     return;
   }
-  body.innerHTML=buys.slice(0,60).map(p=>{
-    const seen=p.ga_client_id?(byClient[p.ga_client_id]||[]):[];
-    const lcp=p75(seen.map(r=>r.lcp));
-    const dwell=seen.map(r=>r.time_on_page).filter(x=>x!=null).reduce((a,b)=>a+b,0);
-    const dev=seen.length?cap(seen[0].device):null;
-    const paths=[...new Set(seen.map(r=>r.path))];
-    const gid=p.ga_client_id||'';
-    const pagesTxt=gid
-      ? `<button class="raw-btn" onclick="showJourney('${gid}','${p.transaction_id||''}')">${paths.length||'view'} page${paths.length===1?'':'s'} →</button>`
-      : '<span style="color:var(--faint)">not matched</span>';
+  const stCls=s=>/paid/.test(s)?'good':/pending|partial/.test(s)?'warn':/void|refund|expired/.test(s)?'poor':'na';
+  body.innerHTML=ords.slice(0,60).map(o=>{
+    const sid=o.rum_session, gid=o.ga_client_id;
+    const journey = sid
+      ? `<button class="raw-btn" onclick="showJourney('${sid}','${o.order_number||''}','session_id')">view journey →</button>`
+      : gid
+      ? `<button class="raw-btn" onclick="showJourney('${gid}','${o.order_number||''}','ga_client_id')">view journey →</button>`
+      : '<span style="color:var(--faint)">not linked</span>';
     return `<tr>
-      <td class="mono" style="color:var(--faint)">${new Date(p.created_at).toLocaleString()}</td>
-      <td class="mono" title="${p.transaction_id||''}">${String(p.transaction_id||'—').slice(0,16)}</td>
-      <td class="cell mono"><b>${money(p.value)}</b></td>
-      <td class="cell">${dev?`<span class="chip">${dev}</span>`:'<span class="mono" style="color:var(--faint)">—</span>'}</td>
-      <td style="font-size:12px">${pagesTxt}</td>
-      ${cellHTML('lcp',lcp,fmtMs)}
-      <td class="cell mono">${dwell?(dwell/1000).toFixed(1)+'s':'—'}</td>
+      <td class="mono" style="color:var(--faint)">${new Date(o.created_at).toLocaleString()}</td>
+      <td class="mono">${o.order_number||'—'}</td>
+      <td class="cell mono"><b>${money(o.total_price)}</b></td>
+      <td class="cell mono">${o.items??'—'}</td>
+      <td class="cell"><span class="cellval ${stCls(o.financial_status||'')}">${o.financial_status||'—'}</span></td>
+      <td style="font-size:12px">${journey}</td>
     </tr>`;
   }).join('');
-  document.getElementById('buyNote').textContent=`${buys.length} order${buys.length>1?'s':''} · ${buys.filter(p=>p.ga_client_id&&byClient[p.ga_client_id]).length} matched to their browsing data`;
+  const linked=ords.filter(o=>o.rum_session||o.ga_client_id).length;
+  document.getElementById('buyNote').textContent=`${ords.length} recent order${ords.length>1?'s':''} · ${linked} linked to a browsing journey`;
 }
 
 // Full page-by-page journey for one buyer, fetched fresh by GA client id (indexed,
 // cheap) so it is COMPLETE — not limited to the ~500 rows held in the browser.
-async function showJourney(gid, txn){
+function paintFunnel(f){
+  const el=document.getElementById('funnelBox'); if(!el) return;
+  if(!f){ el.innerHTML='<div class="empty" style="padding:10px">Loading funnel…</div>'; return; }
+  const steps=[['Sessions',f.sessions],['Viewed product',f.viewed_product],['Added to cart',f.added_to_cart],['Reached cart',f.viewed_cart],['Clicked checkout',f.checkout_click],['Purchased',f.purchased]];
+  if(!steps.some(s=>s[1])){ el.innerHTML='<div class="empty" style="padding:14px">Funnel starts collecting once the updated collector is live — run <b>funnel_and_link.sql</b> and re-paste <b>webvitals.js</b>.</div>'; return; }
+  const base=f.sessions||1;
+  el.innerHTML='<div style="display:flex;flex-direction:column;gap:7px">'+steps.map(([label,n],i)=>{
+    n=n||0; const pct=n/base*100;
+    const drop = i>0 && steps[i-1][1] ? Math.round((1-n/steps[i-1][1])*100) : null;
+    return `<div style="display:flex;align-items:center;gap:10px">
+      <div style="width:120px;font-size:12.5px;color:var(--muted);text-align:right">${label}</div>
+      <div style="flex:1;background:rgba(0,0,0,.06);border-radius:6px;height:24px">
+        <div style="width:${Math.max(1.5,pct)}%;height:100%;background:var(--ink,#222);border-radius:6px"></div>
+      </div>
+      <div style="width:120px;font-size:12px" class="mono">${n.toLocaleString()} · ${pct.toFixed(1)}%</div>
+      <div style="width:70px;font-size:11px;color:var(--faint)">${drop!=null?('−'+drop+'%'):''}</div>
+    </div>`;
+  }).join('')+'</div>';
+}
+
+// key = the id value; field = 'session_id' (cart-stamp link, preferred) or 'ga_client_id' (pixel)
+async function showJourney(key, txn, field){
+  field = field || 'ga_client_id';
   const modal=document.getElementById('journeyModal'), body=document.getElementById('jBody');
   document.getElementById('jTitle').textContent='Buyer journey · order '+(txn||'');
   body.innerHTML='<div class="empty">Loading their page-by-page path…</div>';
@@ -971,7 +976,7 @@ async function showJourney(gid, txn){
   try{
     const {data,error}=await sb.from('rum_events')
       .select('created_at,path,time_on_page,lcp,inp,cls,device,referrer')
-      .eq('ga_client_id',gid).order('created_at',{ascending:true}).limit(200);
+      .eq(field,key).order('created_at',{ascending:true}).limit(200);
     if(error) throw error;
     const rows=data||[];
     if(!rows.length){ body.innerHTML='<div class="empty">No matched page views (the shopper likely blocked cookies).</div>'; return; }
@@ -1024,9 +1029,14 @@ async function ensureData(view){
   if(view==='webvitals' && !loaded.psi)
     jobs.push(sb.from('psi_results').select('*').order('created_at',{ascending:false}).limit(100)
       .then(r=>{DATA.psi=r.data||[]; loaded.psi=1;}));
-  if(view==='purchases' && !loaded.buys)
+  if(view==='purchases' && !loaded.buys){
     jobs.push(sb.from('purchases').select('*').order('created_at',{ascending:false}).limit(200)
       .then(r=>{DATA.purchases=r.data||[]; loaded.buys=1;}));
+    // the real order feed (Shopify) — recent orders for the table + journey links
+    jobs.push(sb.from('shop_orders').select('id,order_number,created_at,total_price,currency,items,financial_status,rum_session,ga_client_id')
+      .order('created_at',{ascending:false}).limit(80)
+      .then(r=>{DATA.shopOrders=r.data||[];}).catch(()=>{}));
+  }
   if(view==='webscore' && !loaded.ws){ loaded.ws=1; jobs.push(loadSavedScores()); }
   if(jobs.length) await Promise.all(jobs);
 }
@@ -1163,6 +1173,7 @@ const fetchPivot     =(f,t)=>cachedRpc('dash_pivot',     {p_from:iso(f),p_to:iso
 const fetchPages     =(f,t)=>cachedRpc('dash_pages',     {p_from:iso(f),p_to:iso(t),p_limit:60}, 'pgs_'+f+'_'+t);
 const fetchPageDaily =(f,t)=>cachedRpc('dash_page_daily',{p_from:iso(f),p_to:iso(t),p_limit:25}, 'pgd_'+f+'_'+t);
 const fetchShopStats =(f,t)=>cachedRpc('shop_stats',     {p_from:iso(f),p_to:iso(t)},            'shop_'+f+'_'+t);
+const fetchFunnel    =(f,t)=>cachedRpc('funnel_stats',   {p_from:iso(f),p_to:iso(t)},            'fun_'+f+'_'+t);
 async function refreshStats(from,to,k){
   try{
     const {data,error}=await sb.rpc('dash_stats',{p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString()});

@@ -65,6 +65,11 @@ function toRow(o) {
   const items = Array.isArray(o.line_items)
     ? o.line_items.reduce((a, li) => a + (+li.quantity || 0), 0)
     : num(o.subtotalLineItemsQuantity ?? o.items);
+  // Cart stamp -> order: the collector wrote _rum_sid / _rum_gid as cart attributes,
+  // which Shopify delivers on the order as note_attributes. This is what links the
+  // order to the shopper's full browsing journey without relying on a pixel.
+  const attrs = {};
+  (o.note_attributes || o.noteAttributes || []).forEach(a => { if (a && a.name) attrs[a.name] = a.value; });
   return {
     id,
     order_number: o.name ?? o.order_number ?? null,
@@ -77,6 +82,8 @@ function toRow(o) {
     landing_site: clip((o.landing_site ?? o.landingPageUrl ?? '').split('?')[0], 300),
     referring_site: clip(o.referring_site ?? o.referrerUrl, 300),
     source_name: o.source_name ?? o.sourceName ?? null,
+    rum_session: attrs._rum_sid || o.rum_session || null,
+    ga_client_id: attrs._rum_gid || o.ga_client_id || null,
     raw: { via: o.__src || 'webhook', receivedAt: new Date().toISOString() }
   };
 }
