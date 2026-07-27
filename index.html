@@ -476,6 +476,20 @@ a{color:inherit}
         </p>
       </section>
 
+      <!-- VISITORS -->
+      <section class="view" data-view="visitors">
+        <div class="grid g4" id="visTiles"></div>
+        <div class="section-h"><h2>Recent visitors</h2><span id="visNote">every visitor’s footprint · click a row to see their page-by-page path</span></div>
+        <div class="wv"><table>
+          <thead><tr><th>Last seen</th><th>Entry page</th><th>Source</th><th class="m">Pages</th><th class="m">Engaged</th><th class="m">Device</th><th>Journey</th></tr></thead>
+          <tbody id="visBody"><tr><td colspan=7 class="empty">Loading visitors…</td></tr></tbody>
+        </table></div>
+        <p style="color:var(--faint);font-size:11.5px;margin-top:12px">
+          Visitors with a Google-cookie id show their <b>full multi-page journey</b>; others (cookies declined) show a single visit.
+          Data goes back to <b>10 July</b> — the whole history we’ve collected. No names or emails are stored.
+        </p>
+      </section>
+
       <!-- MONITORS -->
       <section class="view" data-view="monitors">
         <div class="toolbar">
@@ -660,6 +674,7 @@ function buildNav(){
     ${navBtn('webvitals','Web Vitals','◐')}
     ${navBtn('live','Live Data','⚡')}
     ${navBtn('purchases','Purchases','🛒')}
+    ${navBtn('visitors','Visitors','👣')}
     ${navBtn('monitors','Monitors','🔗')}
     ${navBtn('webscore','Web Score','🎯')}
     <h4>QA Tasks</h4>`;
@@ -684,10 +699,10 @@ function toggleSide(force){
   document.getElementById('side').classList.toggle('open', open);
   document.getElementById('backdrop').classList.toggle('on', open);
 }
-const TITLES={summary:['Summary','Real-user performance across the store'],webvitals:['Web Vitals','Live from your visitors · PageSpeed as cross-check'],live:['Live Data','Raw events streaming from real visitors'],purchases:['Purchases','Real orders · what each buyer actually experienced'],monitors:['Monitors','Per-page Web Vitals by device · 10-day daily sparklines'],webscore:['Web Score','Score & compare any URL — no PageSpeed API needed']};
+const TITLES={summary:['Summary','Real-user performance across the store'],webvitals:['Web Vitals','Live from your visitors · PageSpeed as cross-check'],live:['Live Data','Raw events streaming from real visitors'],purchases:['Purchases','Real orders · what each buyer actually experienced'],visitors:['Visitors','Every visitor’s footprint · pages, time, source · click to see their path'],monitors:['Monitors','Per-page Web Vitals by device · 10-day daily sparklines'],webscore:['Web Score','Score & compare any URL — no PageSpeed API needed']};
 function setTitle(t,s){document.getElementById('vtitle').textContent=t;document.getElementById('vsub').textContent=s;}
 function showView(v){document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on', s.dataset.view===v));}
-function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderCWV();renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='purchases')renderPurchases(); if(v==='monitors')renderMonitors(); if(v==='webscore')renderWebScore(); }
+function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderCWV();renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='purchases')renderPurchases(); if(v==='visitors')renderVisitors(); if(v==='monitors')renderMonitors(); if(v==='webscore')renderWebScore(); }
 
 /* ===================== WEB SCORE (scores any URL via /api/score, no PSI API) === */
 const scoreColor=s=>s==null?'na':(s>=90?'good':s>=50?'warn':'poor');
@@ -945,6 +960,45 @@ function renderPurchases(){
 
 // Full page-by-page journey for one buyer, fetched fresh by GA client id (indexed,
 // cheap) so it is COMPLETE — not limited to the ~500 rows held in the browser.
+function renderVisitors(){
+  const cur=windowRange();
+  const tiles=document.getElementById('visTiles'), body=document.getElementById('visBody');
+  const paintT=(rows)=>{
+    if(!rows){ tiles.innerHTML=''; return; }
+    const total=rows.length, withGa=rows.filter(r=>r[1]==='ga').length;
+    const multi=rows.filter(r=>r[2]>1).length, totEng=rows.reduce((a,r)=>a+(+r[3]||0),0);
+    tiles.innerHTML=[
+      ['Visitors', total.toLocaleString(), cur.label+' · top 150'],
+      ['Multi-page', multi.toLocaleString(), 'saw more than one page'],
+      ['Identified', withGa.toLocaleString(), 'have a journey link'],
+      ['Avg engaged', total?((totEng/total)/1000).toFixed(1)+'s':'—', 'per visitor'],
+    ].map(([h,v,sub])=>`<div class="card"><h3>${h}</h3><div class="metric" style="color:var(--ink)">${v}</div><div class="metric-sub">${sub}</div></div>`).join('');
+  };
+  paintT(null);
+  body.innerHTML='<tr><td colspan=7 class="empty">Loading visitors…</td></tr>';
+  fetchVisitors(cur.from,cur.to).then(rows=>{
+    if(curView!=='visitors') return;
+    rows=rows||[];
+    paintT(rows);
+    if(!rows.length){ body.innerHTML='<tr><td colspan=7 class="empty">No visitor data in this range.</td></tr>'; return; }
+    body.innerHTML=rows.slice(0,150).map(r=>{
+      const [k,by,pages,engaged,,last,device,referrer,entry]=r;
+      const key=String(k).replace(/['\\]/g,'');
+      const jb=`<button class="raw-btn" onclick="showJourney('${key}','','${by==='ga'?'ga_client_id':'session_id'}')">${pages>1?('view '+pages+' pages →'):'view →'}</button>`;
+      return `<tr>
+        <td class="mono" style="color:var(--faint)">${new Date(last).toLocaleString()}</td>
+        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${entry||''}">${entry||'/'}</td>
+        <td style="font-size:12px">${refShort(referrer)}</td>
+        <td class="cell mono">${pages}</td>
+        <td class="cell mono">${engaged?(engaged/1000).toFixed(0)+'s':'—'}</td>
+        <td class="cell">${device?`<span class="chip">${cap(device)}</span>`:'—'}</td>
+        <td style="font-size:12px">${jb}</td>
+      </tr>`;
+    }).join('');
+    document.getElementById('visNote').textContent=`${rows.length} recent visitors · ${rows.filter(r=>r[1]==='ga').length} with a full multi-page journey`;
+  });
+}
+
 function paintFunnel(f){
   const el=document.getElementById('funnelBox'); if(!el) return;
   if(!f){ el.innerHTML='<div class="empty" style="padding:10px">Loading funnel…</div>'; return; }
@@ -1174,6 +1228,7 @@ const fetchPages     =(f,t)=>cachedRpc('dash_pages',     {p_from:iso(f),p_to:iso
 const fetchPageDaily =(f,t)=>cachedRpc('dash_page_daily',{p_from:iso(f),p_to:iso(t),p_limit:25}, 'pgd_'+f+'_'+t);
 const fetchShopStats =(f,t)=>cachedRpc('shop_stats',     {p_from:iso(f),p_to:iso(t)},            'shop_'+f+'_'+t);
 const fetchFunnel    =(f,t)=>cachedRpc('funnel_stats',   {p_from:iso(f),p_to:iso(t)},            'fun_'+f+'_'+t);
+const fetchVisitors  =(f,t)=>cachedRpc('recent_visitors',{p_from:iso(f),p_to:iso(t),p_limit:150},'vis_'+f+'_'+t);
 async function refreshStats(from,to,k){
   try{
     const {data,error}=await sb.rpc('dash_stats',{p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString()});
