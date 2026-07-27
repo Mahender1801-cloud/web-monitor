@@ -35,19 +35,37 @@ export default async function handler(req, res) {
   const key = req.query.key || req.headers['x-order-key'];
   if (key !== SECRET) return res.status(401).json({ error: 'bad key' });
 
-  let o = req.body;
-  if (typeof o === 'string') { try { o = JSON.parse(o); } catch { o = {}; } }
+  let body = req.body;
+  if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
+  body = body || {};
+
+  // Single order (real Shopify webhook) OR an array of orders (CSV backfill).
+  const list = Array.isArray(body) ? body : (Array.isArray(body.orders) ? body.orders : [body]);
+  const rows = list.map(toRow).filter(r => r.id != null);
+  if (!rows.length) return res.status(400).json({ error: 'no valid order id in payload' });
+
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/shop_orders?on_conflict=id`, {
+      method: 'POST',
+      headers: { apikey: SERVICE_KEY, Authorization: 'Bearer ' + SERVICE_KEY,
+                 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify(rows)
+    });
+    if (!r.ok) return res.status(502).json({ error: 'supabase ' + r.status, detail: (await r.text()).slice(0, 300) });
+    return res.status(200).json({ ok: true, upserted: rows.length });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+}
+
+// Map one order (REST webhook shape OR flat backfill shape) to a shop_orders row.
+function toRow(o) {
   o = o || {};
-
   const id = numId(o.id ?? o.order_id ?? o.admin_graphql_api_id);
-  if (id == null) return res.status(400).json({ error: 'no order id in payload', keys: Object.keys(o).slice(0, 20) });
-
-  // items: sum line_items quantities (REST/webhook payload) or fall back to the aggregate field
   const items = Array.isArray(o.line_items)
     ? o.line_items.reduce((a, li) => a + (+li.quantity || 0), 0)
     : num(o.subtotalLineItemsQuantity ?? o.items);
-
-  const row = {
+  return {
     id,
     order_number: o.name ?? o.order_number ?? null,
     created_at: o.created_at ?? o.createdAt ?? new Date().toISOString(),
@@ -59,19 +77,6 @@ export default async function handler(req, res) {
     landing_site: clip((o.landing_site ?? o.landingPageUrl ?? '').split('?')[0], 300),
     referring_site: clip(o.referring_site ?? o.referrerUrl, 300),
     source_name: o.source_name ?? o.sourceName ?? null,
-    raw: { via: 'webhook', receivedAt: new Date().toISOString() }
+    raw: { via: o.__src || 'webhook', receivedAt: new Date().toISOString() }
   };
-
-  try {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/shop_orders?on_conflict=id`, {
-      method: 'POST',
-      headers: { apikey: SERVICE_KEY, Authorization: 'Bearer ' + SERVICE_KEY,
-                 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify(row)
-    });
-    if (!r.ok) return res.status(502).json({ error: 'supabase ' + r.status, detail: (await r.text()).slice(0, 300) });
-    return res.status(200).json({ ok: true, id });
-  } catch (e) {
-    return res.status(500).json({ error: e.message });
-  }
 }
