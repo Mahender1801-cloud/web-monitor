@@ -43,7 +43,7 @@ html,body{max-width:100%}
 .app>.main{min-width:0;overflow-x:clip}
 /* Collapsed rail (desktop): the sidebar shrinks to the logo button, like Claude/ChatGPT */
 .app.railed{grid-template-columns:60px 1fr}
-.app.railed .side .side-foot{opacity:0;pointer-events:none}
+.app.railed .side .side-foot{display:none}
 .app.railed .navgrp h4{display:none}
 .app.railed .nav{justify-content:center;padding:9px 0;gap:0;position:relative}
 .app.railed .nav .lbl{display:none}
@@ -862,9 +862,9 @@ function applyRail(on){
   app.style.gridTemplateColumns = on ? '60px 1fr' : '240px 1fr';
   // Keep the nav usable in rail mode: icons stay, labels hide (see .app.railed CSS).
   document.querySelectorAll('.side .side-foot').forEach(el=>{
-    el.style.opacity = on ? '0' : '1';
-    el.style.pointerEvents = on ? 'none' : '';
-  });
+    el.style.display = on ? 'none' : '';    // display, not opacity: a hidden-but-
+  });                                       // laid-out footer kept the rail wide
+  document.querySelectorAll('.side .navgrp').forEach(el=>{ el.style.padding = on ? '8px 6px' : ''; });
   document.querySelectorAll('.side .navgrp').forEach(el=>{ el.style.opacity='1'; el.style.pointerEvents=''; });
   document.querySelectorAll('.side .nav .lbl').forEach(el=>{ el.style.display = on ? 'none' : ''; });
   document.querySelectorAll('.side .navgrp h4').forEach(el=>{ el.style.display = on ? 'none' : ''; });
