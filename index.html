@@ -33,7 +33,11 @@ a{color:inherit}
 /* No transition on grid-template-columns: animating a grid track is unreliable
    (Chrome can hold the old value, leaving the sidebar stuck at 240px). The
    collapse is instant; the fade below carries the motion. */
-.app{display:grid;grid-template-columns:240px 1fr;min-height:100vh}
+html,body{overflow-x:hidden;max-width:100%}
+/* min-width:0 lets the content column actually shrink; without it a wide table
+   pushed the grid past the viewport and produced a page-wide horizontal bar. */
+.app{display:grid;grid-template-columns:240px 1fr;min-height:100vh;max-width:100vw;overflow-x:hidden}
+.app>.main{min-width:0;overflow-x:hidden}
 /* Collapsed rail (desktop): the sidebar shrinks to the logo button, like Claude/ChatGPT */
 .app.railed{grid-template-columns:60px 1fr}
 .app.railed .side .side-foot{opacity:0;pointer-events:none}
@@ -51,6 +55,42 @@ a{color:inherit}
 .brandtext b{font-family:'Space Grotesk';font-weight:700;font-size:14.5px;letter-spacing:-.01em;display:block;line-height:1.15}
 .brandtext span{display:block;font-size:10.5px;color:var(--faint);font-weight:500;margin-top:2px;letter-spacing:.04em}
 .hlogo{flex-shrink:0;display:block}
+/* ---- Themed dropdown + calendar (replacing native select / date inputs) --- */
+.dd{position:relative;display:inline-block}
+.dd-btn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--surface);
+  color:var(--ink);border-radius:9px;padding:7px 11px;font-family:inherit;font-size:12.5px;cursor:pointer;
+  transition:border-color .14s,box-shadow .14s;white-space:nowrap}
+.dd-btn:hover{border-color:var(--muted)}
+.dd-btn.on{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.dd-caret{color:var(--faint);font-size:10px;margin-left:2px}
+.dd-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:40;min-width:184px;background:var(--surface);
+  border:1px solid var(--line);border-radius:11px;box-shadow:0 12px 34px rgba(16,20,30,.16);padding:5px;display:none}
+.dd-menu.on{display:block;animation:ddin .14s ease}
+@keyframes ddin{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.dd-menu button{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;color:var(--ink);
+  text-align:left;padding:8px 10px;border-radius:7px;font-family:inherit;font-size:12.5px;cursor:pointer}
+.dd-menu button:hover{background:var(--line2)}
+.dd-menu button.sel{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.cal{position:absolute;top:calc(100% + 6px);left:0;z-index:45;background:var(--surface);border:1px solid var(--line);
+  border-radius:13px;box-shadow:0 16px 40px rgba(16,20,30,.18);padding:14px 16px;display:none}
+.cal.on{display:block;animation:ddin .15s ease}
+.cal-months{display:flex;gap:26px}
+.cal-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.cal-hd b{font-family:'Space Grotesk';font-size:13.5px;font-weight:600}
+.cal-nav{border:0;background:none;cursor:pointer;color:var(--muted);font-size:15px;padding:2px 7px;border-radius:6px}
+.cal-nav:hover{background:var(--line2);color:var(--ink)}
+.cal table{border-collapse:collapse}
+.cal th{font-size:10.5px;color:var(--faint);font-weight:600;padding:4px 0;width:32px;text-align:center}
+.cal td{padding:1px}
+.cal .d{width:32px;height:30px;border:0;background:none;border-radius:7px;cursor:pointer;font-family:inherit;
+  font-size:12px;color:var(--ink);transition:background .12s}
+.cal .d:hover{background:var(--line2)}
+.cal .d.mut{color:var(--faint);opacity:.45}
+.cal .d.rng{background:var(--line2);border-radius:0}
+.cal .d.end{background:var(--ink);color:#fff;font-weight:600}
+.cal .d:disabled{opacity:.25;cursor:default}
+.cal-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;
+  border-top:1px solid var(--line);padding-top:11px;font-size:12px;color:var(--muted)}
 /* ---- Scrollbars: thin, themed, and only present when content overflows.
    The default OS bars were heavy, light-grey and clashed with the UI. -------- */
 *{scrollbar-width:thin;scrollbar-color:var(--sb) transparent}
@@ -140,8 +180,8 @@ a{color:inherit}
 .btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
 .btn.pri:hover{background:#4239d6}
 
-.wrap{padding:24px 26px 60px;max-width:1180px;width:100%;margin:0 auto;transition:max-width .18s}
-.app.railed .wrap{max-width:1580px}
+.wrap{padding:24px 26px 60px;max-width:1560px;width:100%;margin:0 auto;transition:max-width .18s}
+.app.railed .wrap{max-width:1720px}
 .menubtn{display:none;border:1px solid var(--line);background:var(--surface);width:34px;height:34px;border-radius:8px;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
 .backdrop{display:none;position:fixed;inset:0;background:rgba(16,23,40,.35);z-index:25}
 .backdrop.on{display:block}
@@ -418,8 +458,6 @@ a{color:inherit}
         <div class="sub" id="vsub">Real-user performance across the store</div>
       </div>
       <div class="live">
-        <button class="btn" onclick="openConfig()">⚙ Connect</button>
-        <button class="btn" id="refreshBtn" onclick="loadAll(true)">↻ Refresh</button>
         <span class="pulse off" id="pulse"></span>
         <span id="livelbl">idle</span>
         <button class="btn" id="liveTick" style="display:none;padding:3px 9px;font-size:11px"
@@ -442,18 +480,13 @@ a{color:inherit}
             <button data-range="90d">90 days</button>
             <button data-range="all">All</button>
           </div>
-          <div class="customrange">
-            <input type="date" id="rangeFrom" title="from"><span>→</span><input type="date" id="rangeTo" title="to">
-            <button class="btn" onclick="applyCustomRange()">Apply</button>
-          </div>
+          <input type="date" id="rangeFrom" style="display:none"><input type="date" id="rangeTo" style="display:none">
+          <button class="dd-btn" id="calBtn" onclick="openCal(event)">
+            <span>📅</span><span id="calLabel">Custom range</span><span class="dd-caret">▾</span>
+          </button>
           <div class="cmp">
             <label>Compare vs</label>
-            <select id="cmpSel" onchange="renderSummary()">
-              <option value="prev">previous period</option>
-              <option value="avg7">last 7-day avg</option>
-              <option value="avg30">last 30-day avg</option>
-              <option value="none">— none —</option>
-            </select>
+            <div class="dd" id="ddCmp"></div>
           </div>
         </div>
         <div class="grid g5" id="sumTiles"></div>
@@ -463,7 +496,8 @@ a{color:inherit}
             <div class="segs sm" id="trendMetric">
               <button data-m="lcp" class="on">LCP</button><button data-m="inp">INP</button><button data-m="cls">CLS</button><button data-m="fcp">FCP</button><button data-m="ttfb">TTFB</button>
             </div>
-            <select id="trendGran" class="gransel" onchange="onTrendGran()">
+            <div class="dd gransel-wrap" id="ddGran"></div>
+            <select id="trendGran" style="display:none" onchange="onTrendGran()">
               <option value="auto">granularity: auto</option>
               <option value="minute">by minute</option>
               <option value="hour">by hour</option>
@@ -832,7 +866,7 @@ function applyRail(on){
   const bt=document.querySelector('.brandtext'); if(bt) bt.style.display = on ? 'none' : '';
   const bb=document.querySelector('.brandbtn'); if(bb) bb.style.justifyContent = on ? 'center' : '';
   // reclaim the freed width for the content instead of leaving a wide empty gutter
-  document.querySelectorAll('.wrap').forEach(el=>{ el.style.maxWidth = on ? '1580px' : ''; });
+  document.querySelectorAll('.wrap').forEach(el=>{ el.style.maxWidth = on ? '1720px' : ''; });
 }
 function toggleRail(){
   if(matchMedia('(max-width:900px)').matches){ toggleSide(); return; }
@@ -1523,7 +1557,7 @@ async function ensureData(view){
   if(jobs.length) await Promise.all(jobs);
 }
 async function loadAll(manual){
-  document.getElementById('refreshBtn').textContent='↻ …';
+  const rb=document.getElementById('refreshBtn'); if(rb) rb.textContent='↻ …';
   if(LIVE && sb){
     try{
       // Only what the shell needs: QA items + recent checks drive the sidebar dots.
@@ -1671,7 +1705,8 @@ async function refreshStats(from,to,k){
 let rpcOK=null;   // null = unknown, true = server stats work, false = RPC not installed
 function renderSummary(){
   const cur=windowRange();
-  const mode=(document.getElementById('cmpSel')||{}).value||'prev';
+  const dd=document.getElementById('ddCmp');
+  const mode=(dd&&dd.getValue)?dd.getValue():'prev';
   const cmp=comparisonRange(cur,mode);
   // NEVER paint a number we know is truncated — a wrong figure that then silently
   // corrects itself is worse than an honest "counting…". Show a placeholder while
@@ -2508,6 +2543,108 @@ function saveConfig(){
 /* ===================== BOOT ================== */
 // PERF: paint the shell immediately, then boot once the deferred libraries land.
 // (supabase-js / Chart.js are `defer`, so they execute before DOMContentLoaded.)
+/* ===================== Themed dropdowns + range calendar ==================
+   The native <select> and two <input type="date"> boxes rendered with OS chrome
+   that clashed with the dashboard. These are drop-in replacements that keep the
+   same state (a hidden <select> still backs the granularity control, so
+   onTrendGran() is untouched).                                              */
+function buildDD(hostId, opts, initial, onPick){
+  const host=document.getElementById(hostId); if(!host) return;
+  let val=initial;
+  const label=()=> (opts.find(o=>o[0]===val)||opts[0])[1];
+  host.innerHTML=`<button class="dd-btn" type="button"><span class="ddlab">${label()}</span><span class="dd-caret">▾</span></button>
+    <div class="dd-menu">${opts.map(o=>`<button type="button" data-v="${o[0]}" class="${o[0]===val?'sel':''}">${o[1]}</button>`).join('')}</div>`;
+  const btn=host.querySelector('.dd-btn'), menu=host.querySelector('.dd-menu');
+  btn.onclick=e=>{ e.stopPropagation(); closeAllDD(menu); menu.classList.toggle('on'); btn.classList.toggle('on',menu.classList.contains('on')); };
+  menu.querySelectorAll('button').forEach(b=>b.onclick=e=>{
+    e.stopPropagation(); val=b.dataset.v;
+    menu.querySelectorAll('button').forEach(x=>x.classList.toggle('sel',x===b));
+    host.querySelector('.ddlab').textContent=label();
+    menu.classList.remove('on'); btn.classList.remove('on');
+    onPick(val);
+  });
+  host.getValue=()=>val;
+}
+function closeAllDD(except){
+  document.querySelectorAll('.dd-menu.on').forEach(m=>{ if(m!==except){ m.classList.remove('on'); m.previousElementSibling?.classList.remove('on'); } });
+  const c=document.getElementById('calPop'); if(c && except!==c) c.classList.remove('on');
+}
+addEventListener('click',()=>closeAllDD());
+
+// ---- two-month range calendar -------------------------------------------
+let calFrom=null, calTo=null, calMonth=new Date();
+function openCal(e){
+  e.stopPropagation(); closeAllDD();
+  let pop=document.getElementById('calPop');
+  if(!pop){ pop=document.createElement('div'); pop.className='cal'; pop.id='calPop';
+    document.getElementById('calBtn').parentElement.style.position='relative';
+    document.getElementById('calBtn').insertAdjacentElement('afterend',pop);
+    pop.onclick=ev=>ev.stopPropagation(); }
+  calMonth=new Date(); calMonth.setDate(1); calMonth.setMonth(calMonth.getMonth()-1);
+  drawCal(); pop.classList.add('on');
+}
+function drawCal(){
+  const pop=document.getElementById('calPop'); if(!pop) return;
+  const mk=(base)=>{
+    const y=base.getFullYear(), m=base.getMonth();
+    const first=new Date(y,m,1), start=(first.getDay()+6)%7;      // Monday-first
+    const days=new Date(y,m+1,0).getDate(), today=new Date(); today.setHours(23,59,59,999);
+    let cells='', d=1;
+    for(let r=0;r<6;r++){
+      let row='';
+      for(let c=0;c<7;c++){
+        if((r===0&&c<start)||d>days){ row+='<td></td>'; continue; }
+        const dt=new Date(y,m,d), iso=fmtISO(dt);
+        const isEnd=(calFrom&&iso===calFrom)||(calTo&&iso===calTo);
+        const inRng=calFrom&&calTo&&iso>calFrom&&iso<calTo;
+        row+=`<td><button class="d ${isEnd?'end':''} ${inRng?'rng':''}" ${dt>today?'disabled':''}
+               onclick="pickCal('${iso}')">${d}</button></td>`;
+        d++;
+      }
+      cells+='<tr>'+row+'</tr>';
+      if(d>days) break;
+    }
+    const nm=base.toLocaleString(undefined,{month:'long',year:'numeric'});
+    return {nm,cells};
+  };
+  const a=mk(calMonth), b=mk(new Date(calMonth.getFullYear(),calMonth.getMonth()+1,1));
+  const head='<tr>'+['Mo','Tu','We','Th','Fr','Sa','Su'].map(x=>`<th>${x}</th>`).join('')+'</tr>';
+  pop.innerHTML=`<div class="cal-months">
+      <div><div class="cal-hd"><button class="cal-nav" onclick="calShift(-1)">←</button><b>${a.nm}</b><span style="width:22px"></span></div>
+        <table>${head}${a.cells}</table></div>
+      <div><div class="cal-hd"><span style="width:22px"></span><b>${b.nm}</b><button class="cal-nav" onclick="calShift(1)">→</button></div>
+        <table>${head}${b.cells}</table></div>
+    </div>
+    <div class="cal-foot">
+      <span>${calFrom? (calFrom + (calTo? '  →  '+calTo : '  →  …')) : 'Pick a start date'}</span>
+      <span><button class="btn" onclick="clearCal()">Clear</button>
+      <button class="btn pri" ${calFrom&&calTo?'':'disabled'} onclick="applyCal()">Apply</button></span>
+    </div>`;
+}
+const fmtISO=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+function calShift(n){ calMonth.setMonth(calMonth.getMonth()+n); drawCal(); }
+function pickCal(iso){
+  if(!calFrom||calTo){ calFrom=iso; calTo=null; }
+  else if(iso<calFrom){ calTo=calFrom; calFrom=iso; }
+  else calTo=iso;
+  drawCal();
+}
+function clearCal(){ calFrom=calTo=null; drawCal(); }
+function applyCal(){
+  if(!calFrom||!calTo) return;
+  const f=document.getElementById('rangeFrom'), t=document.getElementById('rangeTo');
+  if(f&&t){ f.value=calFrom; t.value=calTo; }
+  document.getElementById('calLabel').textContent=calFrom+' → '+calTo;
+  document.getElementById('calPop').classList.remove('on');
+  applyCustomRange();
+}
+function initControls(){
+  buildDD('ddCmp',[['prev','previous period'],['avg7','last 7-day avg'],['avg30','last 30-day avg'],['none','— none —']],
+          'prev', ()=>renderSummary());
+  buildDD('ddGran',[['auto','granularity: auto'],['minute','by minute'],['hour','by hour'],['day','by day']],
+          'auto', v=>{ const sel=document.getElementById('trendGran'); if(sel){ sel.value=v; onTrendGran(); } });
+}
+
 // Credentials are no longer hard-coded in this file. They come from /api/config,
 // which reads the Vercel env vars — so the repo carries no keys and nothing is
 // shown on screen. (The anon key still reaches the browser, as it must for a
@@ -2521,7 +2658,7 @@ async function loadRuntimeConfig(){
   }catch{}
 }
 async function boot(){
-  initRail();buildNav();buildAudienceCards();initRangeBar();initTrendControls();initCwvDevice();initLabStrategy();
+  initRail();initControls();buildNav();buildAudienceCards();initRangeBar();initTrendControls();initCwvDevice();initLabStrategy();
   await loadRuntimeConfig();
   initSB();
   loadAll().then(subscribe);
