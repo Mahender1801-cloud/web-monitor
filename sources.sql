@@ -1,7 +1,14 @@
 -- ============================================================================
--- Traffic sources — how visitors arrive (Instagram, Meta, search, shared link…).
--- Classifies rum_events by referrer. Fast: referrer + the visitor key are both in
--- rum_session_cover_idx, so this is an index-only scan. Run once in SQL Editor.
+-- Traffic sources — how visitors arrive (Meta Ads, Instagram, search, shared…).
+--
+-- Uses the SHARED public.traffic_channel() classifier (defined in rollup.sql /
+-- traffic_perf_fix.sql) so the Visitors tab and the Summary "Traffic source" card
+-- always agree. An earlier version classified on `referrer` alone here, which
+-- ignored utm_source/utm_medium/gclid/fbclid — paid Meta and Google Ads traffic
+-- was mislabelled as plain Instagram/Facebook/Direct in this view only.
+--
+-- Fast: referrer + the visitor key are covered by rum_session_cover_idx.
+-- Run after rollup.sql (which defines traffic_channel).
 -- ============================================================================
 create or replace function public.traffic_sources(p_from timestamptz, p_to timestamptz)
 returns json language plpgsql stable
@@ -11,21 +18,7 @@ declare result json;
 begin
   with w as materialized (
     select coalesce(nullif(ga_client_id,''), session_id) as k,
-      case
-        when referrer is null or referrer = ''                      then 'Direct'
-        when referrer ilike '%instagram%' or referrer ilike '%l.instagram%' then 'Instagram'
-        when referrer ilike '%facebook%'  or referrer ilike '%l.facebook%'
-          or referrer ilike '%fb.com%'    or referrer ilike '%fb.me%'   then 'Facebook / Meta'
-        when referrer ilike '%whatsapp%'  or referrer ilike '%wa.me%'
-          or referrer ilike '%t.co%'      or referrer ilike '%bit.ly%'
-          or referrer ilike '%lnk.%'      or referrer ilike '%linktr%' then 'Shared link'
-        when referrer ilike '%google%'                              then 'Google'
-        when referrer ilike '%youtube%'                             then 'YouTube'
-        when referrer ilike '%bing%' or referrer ilike '%yahoo%'
-          or referrer ilike '%duckduckgo%'                          then 'Other search'
-        when referrer ilike '%hashtageyewear%'                      then 'Internal'
-        else 'Other referral'
-      end as channel
+           public.traffic_channel(referrer, utm_source, utm_medium, gclid, fbclid) as channel
     from public.rum_events
     where created_at >= p_from and created_at <= p_to
       and coalesce(nullif(ga_client_id,''), session_id) is not null
