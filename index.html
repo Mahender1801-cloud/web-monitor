@@ -33,11 +33,14 @@ a{color:inherit}
 /* No transition on grid-template-columns: animating a grid track is unreliable
    (Chrome can hold the old value, leaving the sidebar stuck at 240px). The
    collapse is instant; the fade below carries the motion. */
-html,body{overflow-x:hidden;max-width:100%}
-/* min-width:0 lets the content column actually shrink; without it a wide table
-   pushed the grid past the viewport and produced a page-wide horizontal bar. */
-.app{display:grid;grid-template-columns:240px 1fr;min-height:100vh;max-width:100vw;overflow-x:hidden}
-.app>.main{min-width:0;overflow-x:hidden}
+html,body{max-width:100%}
+/* NOTE: do NOT put overflow-x:hidden on html/body/.app. Any of those turns the
+   element into a scroll container, which silently kills `position:sticky` on the
+   sidebar — that is why the sidebar started scrolling away with the page.
+   `overflow-x:clip` on the content column contains a wide table WITHOUT creating
+   a scroll container, and min-width:0 lets the grid column actually shrink. */
+.app{display:grid;grid-template-columns:240px 1fr;min-height:100vh;max-width:100vw}
+.app>.main{min-width:0;overflow-x:clip}
 /* Collapsed rail (desktop): the sidebar shrinks to the logo button, like Claude/ChatGPT */
 .app.railed{grid-template-columns:60px 1fr}
 .app.railed .side .side-foot{opacity:0;pointer-events:none}
@@ -158,7 +161,7 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
 @keyframes tmin{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:scale(1)}}
 .tmnode .tn{font-size:11.5px;font-weight:600;line-height:1.25;overflow:hidden;text-overflow:ellipsis}
 .tmnode .tv{font-size:11px;opacity:.9;font-family:ui-monospace,Menlo,monospace;margin-top:2px}
-.side{background:var(--surface);border-right:1px solid var(--line);position:sticky;top:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
+.side{background:var(--surface);border-right:1px solid var(--line);position:sticky;top:0;height:100vh;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;align-self:start}
 .brand{padding:20px 20px 14px;display:flex;align-items:center;gap:11px}
 .lens{width:26px;height:26px;border-radius:50%;background:conic-gradient(from 210deg,var(--accent),#8B84F5,var(--accent));position:relative;box-shadow:inset 0 0 0 2px #fff, inset 0 0 0 3px var(--accent)}
 .lens::after{content:"";position:absolute;inset:6px;border-radius:50%;background:#fff;opacity:.9}
