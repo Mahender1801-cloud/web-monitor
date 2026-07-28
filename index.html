@@ -1579,7 +1579,7 @@ async function loadAll(manual){
       updateDots();
       await ensureData(curView);                      // whatever the current view needs
       renderView(curView==='task'?null:curView); if(curView==='task')renderTask();
-      document.getElementById('refreshBtn').textContent='↻ Refresh';
+      if(rb) rb.textContent='↻ Refresh';
       return;
     }catch(e){ console.error(e); alert('Load failed: '+e.message); }
   } else {
@@ -1588,7 +1588,7 @@ async function loadAll(manual){
     DATA.audience=audienceFromRows(DATA.rum);
   }
   updateDots(); renderView(curView==='task'?null:curView); if(curView==='task')renderTask();
-  document.getElementById('refreshBtn').textContent='↻ Refresh';
+  if(rb) rb.textContent='↻ Refresh';
 }
 function makeSampleChecks(){
   return SAMPLE_ITEMS.filter(i=>i.check_type==='auto').map(i=>{
