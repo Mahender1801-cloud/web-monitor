@@ -585,7 +585,6 @@ a{color:inherit}
           </div>
           <div class="toolbar">
             <div class="segs sm" id="labStrategy"><button data-s="mobile" class="on">📱 Mobile</button><button data-s="desktop">🖥 Desktop</button></div>
-            <input id="psiKey" placeholder="Google PSI API key (optional, avoids rate limits)" style="flex:1;min-width:240px" onchange="localStorage.setItem('psi_key',this.value.trim())">
           </div>
           <div id="labReport"></div>
         </div>
@@ -620,11 +619,10 @@ a{color:inherit}
 <div class="modal-bg" id="cfgModal">
   <div class="modal">
     <h3>Connect Supabase</h3>
-    <p style="color:var(--muted);font-size:13px;margin-top:0">Paste from Supabase → Project Settings → API. Stored only in this browser.</p>
+    <p style="color:var(--muted);font-size:13px;margin-top:0">Only needed if the deployment hasn't been configured. Values are masked and stored in this browser only — the <b>service_role</b> key must never be entered here.</p>
     <div style="display:flex;flex-direction:column;gap:10px">
-      <input id="cfgUrl" class="toolbar" placeholder="https://xxxx.supabase.co" style="padding:9px 11px;border:1px solid var(--line);border-radius:8px">
-      <input id="cfgKey" class="toolbar" placeholder="anon public key (eyJ…)" style="padding:9px 11px;border:1px solid var(--line);border-radius:8px">
-      <input id="cfgPsi" class="toolbar" placeholder="PageSpeed API key (optional)" style="padding:9px 11px;border:1px solid var(--line);border-radius:8px">
+      <input id="cfgUrl" class="toolbar" type="password" autocomplete="off" placeholder="https://xxxx.supabase.co" style="padding:9px 11px;border:1px solid var(--line);border-radius:8px">
+      <input id="cfgKey" class="toolbar" type="password" autocomplete="off" placeholder="anon public key (eyJ…)" style="padding:9px 11px;border:1px solid var(--line);border-radius:8px">
     </div>
     <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
       <button class="btn" onclick="closeConfig()">Cancel</button>
@@ -649,7 +647,7 @@ a{color:inherit}
 <script>
 /* ============================ CONFIG ============================ */
 // Hardcode here for production, or leave blank and use the Connect button.
-let CONFIG = { url:'https://ijzudvwhzsnwysucyves.supabase.co', key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlqenVkdndoenNud3lzdWN5dmVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5MzA1MDYsImV4cCI6MjA5OTUwNjUwNn0.i59l07obJhiKt-RND4FEsETKpVUsvQiVGYxDYt5K0Cw', psi:'' };
+let CONFIG = { url:'', key:'', psi:'' };   // filled from /api/config (Vercel env vars)
 try { const s = JSON.parse(localStorage.getItem('hm_cfg')||'null'); if(s) CONFIG=s; } catch(e){}
 let sb = null, LIVE = false;
 function initSB(){ if(CONFIG.url && CONFIG.key && window.supabase){ sb = window.supabase.createClient(CONFIG.url, CONFIG.key); LIVE=true; } else { LIVE=false; } }
@@ -849,7 +847,8 @@ function initLabStrategy(){
     document.querySelectorAll('#labStrategy button').forEach(x=>x.classList.toggle('on',x===b));
     labStrategy=b.dataset.s;
   });
-  const k=localStorage.getItem('psi_key'); if(k){const el=document.getElementById('psiKey'); if(el)el.value=k;}
+  // PSI key is no longer client-side — /api/psi holds it server-side.
+  try{ localStorage.removeItem('psi_key'); }catch{}
 }
 async function runLighthouse(){
   let url=document.getElementById('wsUrl').value.trim();
@@ -860,13 +859,8 @@ async function runLighthouse(){
   const btn=document.getElementById('wsLab'), orig=btn.textContent; btn.textContent='⏳ running…'; btn.disabled=true;
   rep.innerHTML='<div class="card"><div class="empty">Running a real Lighthouse audit on Google’s servers — this takes 15–40 seconds…</div></div>';
   try{
-    const key=(localStorage.getItem('psi_key')||'').trim();
-    const api=new URL('https://www.googleapis.com/pagespeedonline/v5/runPagespeed');
-    api.searchParams.set('url',url);
-    api.searchParams.set('strategy',labStrategy);
-    ['performance','accessibility','best-practices','seo'].forEach(c=>api.searchParams.append('category',c));
-    if(key) api.searchParams.set('key',key);
-    const r=await fetch(api);
+    // Server-side proxy: the PSI key lives in a Vercel env var, never in the page.
+    const r=await fetch('/api/psi?strategy='+encodeURIComponent(labStrategy)+'&url='+encodeURIComponent(url));
     const j=await r.json();
     if(j.error){
       const q=j.error.code===429||/quota|rate/i.test(j.error.message||'');
@@ -2315,8 +2309,22 @@ function saveConfig(){
 /* ===================== BOOT ================== */
 // PERF: paint the shell immediately, then boot once the deferred libraries land.
 // (supabase-js / Chart.js are `defer`, so they execute before DOMContentLoaded.)
-function boot(){
-  initRail();buildNav();buildAudienceCards();initRangeBar();initTrendControls();initCwvDevice();initLabStrategy();initSB();
+// Credentials are no longer hard-coded in this file. They come from /api/config,
+// which reads the Vercel env vars — so the repo carries no keys and nothing is
+// shown on screen. (The anon key still reaches the browser, as it must for a
+// client-side dashboard; RLS is what keeps that safe — see SECURITY_rls_lockdown.sql.)
+async function loadRuntimeConfig(){
+  if(CONFIG.url && CONFIG.key) return;                 // already set (localStorage)
+  try{
+    const r=await fetch('/api/config',{cache:'no-store'});
+    if(r.ok){ const j=await r.json();
+      if(j.supabaseUrl && j.supabaseAnonKey){ CONFIG={url:j.supabaseUrl,key:j.supabaseAnonKey,psi:''}; } }
+  }catch{}
+}
+async function boot(){
+  initRail();buildNav();buildAudienceCards();initRangeBar();initTrendControls();initCwvDevice();initLabStrategy();
+  await loadRuntimeConfig();
+  initSB();
   loadAll().then(subscribe);
 }
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',boot);
