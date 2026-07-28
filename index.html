@@ -51,8 +51,20 @@ a{color:inherit}
 .brandtext b{font-family:'Space Grotesk';font-weight:700;font-size:14.5px;letter-spacing:-.01em;display:block;line-height:1.15}
 .brandtext span{display:block;font-size:10.5px;color:var(--faint);font-weight:500;margin-top:2px;letter-spacing:.04em}
 .hlogo{flex-shrink:0;display:block}
+/* ---- Scrollbars: thin, themed, and only present when content overflows.
+   The default OS bars were heavy, light-grey and clashed with the UI. -------- */
+*{scrollbar-width:thin;scrollbar-color:var(--sb) transparent}
+:root{--sb:rgba(120,128,145,.34);--sb-hover:rgba(120,128,145,.62)}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--sb);border-radius:99px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--sb-hover);border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-corner{background:transparent}
+/* subtle: fade the bar in on hover for inner panels */
+.hmwrap::-webkit-scrollbar-thumb,.pivwrap::-webkit-scrollbar-thumb,.fkey::-webkit-scrollbar-thumb{background:rgba(120,128,145,.18);background-clip:content-box;border:2px solid transparent}
+.hmwrap:hover::-webkit-scrollbar-thumb,.pivwrap:hover::-webkit-scrollbar-thumb,.fkey:hover::-webkit-scrollbar-thumb{background:var(--sb);background-clip:content-box;border:2px solid transparent}
 /* ---- Traffic funnel (Visitors tab) ------------------------------------- */
-.funnelwrap{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap;margin-bottom:6px}
+.funnelwrap{display:flex;gap:22px;align-items:stretch;flex-wrap:wrap;margin-bottom:6px}
 .funnelsvg{flex:1 1 380px;min-width:300px;max-width:560px;overflow:visible}
 .fband{cursor:pointer;transition:opacity .18s,transform .18s;transform-origin:center;
   animation:fgrow .5s cubic-bezier(.2,.9,.3,1) both}
@@ -61,7 +73,7 @@ a{color:inherit}
 @keyframes fgrow{from{opacity:0;transform:scaleX(.25)}to{opacity:1;transform:scaleX(1)}}
 .flabel{font-size:11.5px;font-weight:600;fill:#fff;pointer-events:none;letter-spacing:.02em}
 .flabel.dark{fill:#18463a}
-.fkey{flex:1 1 220px;min-width:200px;font-size:12.5px}
+.fkey{flex:1 1 250px;min-width:230px;max-width:340px;font-size:12.5px;max-height:360px;overflow-y:auto;padding-right:4px}
 .fkey button{display:flex;align-items:center;gap:9px;width:100%;background:none;border:0;padding:6px 8px;
   border-radius:8px;cursor:pointer;text-align:left;transition:background .15s;color:inherit;font-size:12.5px}
 .fkey button:hover{background:rgba(0,0,0,.05)}
@@ -74,7 +86,7 @@ a{color:inherit}
 .repcard .v{font-family:'Space Grotesk';font-size:21px;font-weight:600;letter-spacing:-.02em}
 .repcard .s{font-size:11px;color:var(--faint);margin-top:2px}
 /* ---- Heatmap pivot (sticky header row + first column) ------------------- */
-.hmwrap{overflow:auto;max-height:340px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.hmwrap{overflow:auto;max-height:min(62vh,560px);border:1px solid var(--line);border-radius:10px;background:var(--surface)}
 .hm{border-collapse:separate;border-spacing:0;width:100%;font-size:12px}
 .hm th,.hm td{padding:7px 9px;white-space:nowrap}
 .hm thead th{position:sticky;top:0;z-index:3;background:var(--surface);border-bottom:1px solid var(--line);
@@ -91,8 +103,8 @@ a{color:inherit}
   padding:9px 11px;font-size:11.5px;line-height:1.55;box-shadow:0 8px 26px rgba(0,0,0,.28);max-width:230px;display:none}
 #hmTip b{font-size:12.5px;display:block;margin-bottom:3px}
 /* ---- Treemap (How visitors arrive) ------------------------------------- */
-.tmwrap{position:relative;flex:1 1 440px;min-width:300px;height:340px;border-radius:12px;overflow:hidden;border:1px solid var(--line)}
-.tmnode{position:absolute;overflow:hidden;cursor:pointer;border:2px solid var(--surface);
+.tmwrap{position:relative;flex:2 1 460px;min-width:300px;height:360px;border-radius:12px;overflow:hidden;border:1px solid var(--line);background:var(--line2)}
+.tmnode{position:absolute;overflow:hidden;cursor:pointer;border:1.5px solid var(--surface);border-radius:3px;
   display:flex;flex-direction:column;justify-content:flex-start;padding:7px 8px;
   transition:filter .15s,transform .15s;animation:tmin .45s cubic-bezier(.2,.9,.3,1) both}
 .tmnode:hover{filter:brightness(1.09)}
@@ -128,7 +140,8 @@ a{color:inherit}
 .btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
 .btn.pri:hover{background:#4239d6}
 
-.wrap{padding:24px 26px 60px;max-width:1180px;width:100%;margin:0 auto}
+.wrap{padding:24px 26px 60px;max-width:1180px;width:100%;margin:0 auto;transition:max-width .18s}
+.app.railed .wrap{max-width:1580px}
 .menubtn{display:none;border:1px solid var(--line);background:var(--surface);width:34px;height:34px;border-radius:8px;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
 .backdrop{display:none;position:fixed;inset:0;background:rgba(16,23,40,.35);z-index:25}
 .backdrop.on{display:block}
@@ -409,6 +422,8 @@ a{color:inherit}
         <button class="btn" id="refreshBtn" onclick="loadAll(true)">↻ Refresh</button>
         <span class="pulse off" id="pulse"></span>
         <span id="livelbl">idle</span>
+        <button class="btn" id="liveTick" style="display:none;padding:3px 9px;font-size:11px"
+                title="New visitor data arrived — click to fold it in" onclick="applyLive()">+0 new</button>
       </div>
     </div>
 
@@ -666,6 +681,12 @@ a{color:inherit}
   <div style="text-align:right;margin-top:14px"><button class="btn" onclick="document.getElementById('journeyModal').classList.remove('on')">Close</button></div>
 </div></div>
 <div id="hmTip"></div>
+<div class="modal-bg" id="pivModal"><div class="modal" style="max-width:min(1100px,94vw)">
+  <h3 id="pivTitle">Breakdown</h3>
+  <p style="color:var(--muted);font-size:12px;margin:2px 0 10px">Colour shows volume · hover any cell for its share of the row, column and all traffic</p>
+  <div id="pivBody"></div>
+  <div style="text-align:right;margin-top:14px"><button class="btn" onclick="document.getElementById('pivModal').classList.remove('on')">Close</button></div>
+</div></div>
 <div class="modal-bg" id="chanModal"><div class="modal" style="max-width:680px">
   <h3 id="chTitle">Channel</h3>
   <div id="chBody" style="max-height:70vh;overflow:auto;margin-top:8px"></div>
@@ -810,6 +831,8 @@ function applyRail(on){
   });
   const bt=document.querySelector('.brandtext'); if(bt) bt.style.display = on ? 'none' : '';
   const bb=document.querySelector('.brandbtn'); if(bb) bb.style.justifyContent = on ? 'center' : '';
+  // reclaim the freed width for the content instead of leaving a wide empty gutter
+  document.querySelectorAll('.wrap').forEach(el=>{ el.style.maxWidth = on ? '1580px' : ''; });
 }
 function toggleRail(){
   if(matchMedia('(max-width:900px)').matches){ toggleSide(); return; }
@@ -1307,9 +1330,33 @@ function paintVisitorReport(d){
         <div class="mono" style="width:56px;text-align:right;color:var(--muted)">${(+a[1]).toLocaleString()}</div>
       </div>`).join('')+'</div>';
   };
-  el.innerHTML+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px">
-    <div>${list('Where they land',d.top_entry)}</div>
-    <div>${list('Where they leave',d.top_exit)}</div></div>`;
+  // Device split + engagement quality, then the landing/exit pages.
+  const dev=(d.by_device||[]);
+  const devTot=dev.reduce((a,x)=>a+(+x[1]||0),0)||1;
+  const devBar=dev.length?`<div class="section-h" style="margin-top:2px"><h2 style="font-size:13px">Devices</h2></div>
+    <div style="display:flex;height:26px;border-radius:7px;overflow:hidden;margin-bottom:8px;border:1px solid var(--line)">`
+    + dev.map((x,i)=>`<div title="${esc(cap(x[0]))} · ${(+x[1]).toLocaleString()} (${(+x[1]/devTot*100).toFixed(1)}%)"
+        style="width:${(+x[1]/devTot*100)}%;background:${TM_COLORS[i%TM_COLORS.length]};display:flex;align-items:center;justify-content:center;color:#fff;font-size:10.5px;font-weight:600">
+        ${(+x[1]/devTot*100)>=12?esc(cap(x[0])):''}</div>`).join('')
+    + `</div><div style="font-size:11.5px;color:var(--muted);margin-bottom:12px">`
+    + dev.map((x,i)=>`<span style="margin-right:12px"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${TM_COLORS[i%TM_COLORS.length]};margin-right:5px"></span>${esc(cap(x[0]))} ${(+x[1]).toLocaleString()} · ${(+x[1]/devTot*100).toFixed(1)}%</span>`).join('')
+    + `</div>`:'';
+
+  // How far visitors get: 1 page / 2-4 / 5+  — the shape of engagement.
+  const v=d.visitors||0, b=d.bounced||0, deep=d.deep||0, mid=Math.max(0,v-b-deep);
+  const seg=[['Left after 1 page',b,'#C75C63'],['Browsed 2–4 pages',mid,'#E0C96A'],['Explored 5+ pages',deep,'#2E9E77']];
+  const depth=v?`<div class="section-h" style="margin-top:2px"><h2 style="font-size:13px">How far they get</h2></div>
+    <div style="display:flex;height:26px;border-radius:7px;overflow:hidden;margin-bottom:8px;border:1px solid var(--line)">`
+    + seg.map(([l,n,c])=>`<div title="${l} · ${n.toLocaleString()} (${(n/v*100).toFixed(1)}%)"
+        style="width:${(n/v*100)}%;background:${c};display:flex;align-items:center;justify-content:center;color:#fff;font-size:10.5px;font-weight:600">
+        ${(n/v*100)>=14?((n/v*100).toFixed(0)+'%'):''}</div>`).join('')
+    + `</div><div style="font-size:11.5px;color:var(--muted);margin-bottom:12px">`
+    + seg.map(([l,n,c])=>`<span style="margin-right:12px"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${c};margin-right:5px"></span>${l} ${n.toLocaleString()}</span>`).join('')
+    + `</div>`:'';
+
+  el.innerHTML+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:22px">
+    <div>${devBar}${list('Where they land',d.top_entry)}</div>
+    <div>${depth}${list('Where they leave',d.top_exit)}</div></div>`;
 }
 
 function renderVisitors(){
@@ -1831,7 +1878,24 @@ function buildAudienceCards(){
       </div>
     </div>`).join('');
 }
-function flipCard(k,toBack){ const c=document.getElementById('fc-'+k); if(c)c.classList.toggle('flipped',!!toBack); }
+// The table used to live on the card's back face — only ~200px tall, so the grid
+// was unreadable and needed two-axis scrolling. It now opens full-width in a modal
+// where the whole heatmap fits.
+const PIV_TITLE={device:'Device',os:'Operating system',net:'Network',ref:'Traffic source'};
+function flipCard(k,toBack){
+  if(toBack){ openPivot(k); return; }
+  const c=document.getElementById('fc-'+k); if(c)c.classList.remove('flipped');
+}
+function openPivot(k){
+  const m=document.getElementById('pivModal');
+  document.getElementById('pivTitle').textContent=(PIV_TITLE[k]||k)+' × page';
+  document.getElementById('pivBody').innerHTML = PIVOT_DATA
+    ? pivotHTML(k)
+    : '<div class="empty">Loading…</div>';
+  m.classList.add('on');
+  if(!PIVOT_DATA){ const cur=windowRange(); fetchPivot(cur.from,cur.to).then(P=>{ PIVOT_DATA=P;
+    document.getElementById('pivBody').innerHTML = P ? pivotHTML(k) : '<div class="empty">Run <b>dash_tables.sql</b>.</div>'; }); }
+}
 /* ---- TRUE 3D extruded pie, drawn natively in canvas ----------------------
    Real 3D geometry (elliptical projection + extruded side walls), not a CSS tilt:
      · perspective squash  -> ry = rx * 0.42
@@ -1984,7 +2048,18 @@ function renderAudience(rows,S){
 // Realtime inserts must NOT trigger a re-aggregation storm. renderSummarySoon()
 // already refreshes the view (debounced) using the cached dash_stats result.
 function refreshAudienceSoon(){ /* intentionally a no-op — see DB-LOAD BUDGET above */ }
-let sumTimer; function renderSummarySoon(){clearTimeout(sumTimer);sumTimer=setTimeout(()=>{if(curView==='summary')renderSummary();},1200);}
+// Realtime inserts used to re-run renderSummary(), which rebuilt every chart and
+// replayed its intro animation — the dashboard visibly "restarted" every few
+// seconds. Now a burst only bumps the live counters; the heavy aggregates refresh
+// on the normal cadence (or the Refresh button), so the view stays in flow.
+let sumTimer, liveCount=0;
+function renderSummarySoon(){
+  liveCount++;
+  const el=document.getElementById('liveTick');
+  if(el){ el.textContent='+'+liveCount+' new'; el.style.display=''; }
+  clearTimeout(sumTimer);
+  sumTimer=setTimeout(()=>{ if(curView==='summary'){ liveCount=0; if(el) el.style.display='none'; renderSummary(); } },45000);
+}
 let liveTimer; function renderLiveSoon(){clearTimeout(liveTimer);liveTimer=setTimeout(()=>{if(curView==='live')renderLive();},700);}
 let wvTimer;   function renderWVLiveSoon(){clearTimeout(wvTimer);wvTimer=setTimeout(()=>{if(curView==='webvitals'){renderCWV();renderWVLive();}},900);}
 /* ---- Pivot report: a dimension (device/os/net/ref) broken down by page group ---- */
@@ -2375,6 +2450,12 @@ async function runPSI(mons, btn, alsoTask){
 }
 
 /* ===================== REALTIME ================== */
+function applyLive(){
+  const el=document.getElementById('liveTick'); if(el) el.style.display='none';
+  liveCount=0; clearTimeout(sumTimer);
+  statsCache={}; rpcCache={};                 // drop cached aggregates so we re-read
+  renderView(curView);
+}
 function subscribe(){
   if(!LIVE||!sb)return;
   sb.channel('rum').on('postgres_changes',{event:'INSERT',schema:'public',table:'rum_events'},payload=>{
@@ -2389,10 +2470,10 @@ function subscribe(){
 }
 
 /* ===================== CONFIG MODAL ================== */
-function openConfig(){document.getElementById('cfgUrl').value=CONFIG.url;document.getElementById('cfgKey').value=CONFIG.key;document.getElementById('cfgPsi').value=CONFIG.psi;document.getElementById('cfgModal').classList.add('on');}
+function openConfig(){document.getElementById('cfgUrl').value=CONFIG.url||'';document.getElementById('cfgKey').value=CONFIG.key||'';document.getElementById('cfgModal').classList.add('on');}
 function closeConfig(){document.getElementById('cfgModal').classList.remove('on');}
 function saveConfig(){
-  CONFIG={url:document.getElementById('cfgUrl').value.trim(),key:document.getElementById('cfgKey').value.trim(),psi:document.getElementById('cfgPsi').value.trim()};
+  CONFIG={url:document.getElementById('cfgUrl').value.trim(),key:document.getElementById('cfgKey').value.trim(),psi:''};
   try{localStorage.setItem('hm_cfg',JSON.stringify(CONFIG));}catch(e){}
   closeConfig();initSB();subscribe();loadAll();
 }
