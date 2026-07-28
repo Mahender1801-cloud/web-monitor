@@ -73,6 +73,32 @@ a{color:inherit}
 .repcard h4{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--faint);margin:0 0 6px;font-weight:600}
 .repcard .v{font-family:'Space Grotesk';font-size:21px;font-weight:600;letter-spacing:-.02em}
 .repcard .s{font-size:11px;color:var(--faint);margin-top:2px}
+/* ---- Heatmap pivot (sticky header row + first column) ------------------- */
+.hmwrap{overflow:auto;max-height:340px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.hm{border-collapse:separate;border-spacing:0;width:100%;font-size:12px}
+.hm th,.hm td{padding:7px 9px;white-space:nowrap}
+.hm thead th{position:sticky;top:0;z-index:3;background:var(--surface);border-bottom:1px solid var(--line);
+  font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);font-weight:600;text-align:right}
+.hm thead th.hcorner{left:0;z-index:4;text-align:left}
+.hm .hrow{position:sticky;left:0;z-index:2;background:var(--surface);text-align:left;font-weight:500;
+  border-right:1px solid var(--line);max-width:150px;overflow:hidden;text-overflow:ellipsis}
+.hm .hcell{text-align:right;font-family:ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;
+  cursor:default;transition:outline-color .12s;outline:2px solid transparent;outline-offset:-2px}
+.hm .hcell:hover{outline-color:var(--ink)}
+.hm .tot{font-weight:600;background:var(--line2)}
+.hm .hfoot .hrow,.hm .hfoot .hcell{background:var(--line2);font-weight:600;border-top:1px solid var(--line)}
+#hmTip{position:fixed;z-index:99;pointer-events:none;background:#12141A;color:#fff;border-radius:9px;
+  padding:9px 11px;font-size:11.5px;line-height:1.55;box-shadow:0 8px 26px rgba(0,0,0,.28);max-width:230px;display:none}
+#hmTip b{font-size:12.5px;display:block;margin-bottom:3px}
+/* ---- Treemap (How visitors arrive) ------------------------------------- */
+.tmwrap{position:relative;flex:1 1 440px;min-width:300px;height:340px;border-radius:12px;overflow:hidden;border:1px solid var(--line)}
+.tmnode{position:absolute;overflow:hidden;cursor:pointer;border:2px solid var(--surface);
+  display:flex;flex-direction:column;justify-content:flex-start;padding:7px 8px;
+  transition:filter .15s,transform .15s;animation:tmin .45s cubic-bezier(.2,.9,.3,1) both}
+.tmnode:hover{filter:brightness(1.09)}
+@keyframes tmin{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:scale(1)}}
+.tmnode .tn{font-size:11.5px;font-weight:600;line-height:1.25;overflow:hidden;text-overflow:ellipsis}
+.tmnode .tv{font-size:11px;opacity:.9;font-family:ui-monospace,Menlo,monospace;margin-top:2px}
 .side{background:var(--surface);border-right:1px solid var(--line);position:sticky;top:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
 .brand{padding:20px 20px 14px;display:flex;align-items:center;gap:11px}
 .lens{width:26px;height:26px;border-radius:50%;background:conic-gradient(from 210deg,var(--accent),#8B84F5,var(--accent));position:relative;box-shadow:inset 0 0 0 2px #fff, inset 0 0 0 3px var(--accent)}
@@ -145,9 +171,10 @@ a{color:inherit}
 .flipcard.flipped .flipinner{transform:rotateY(-180deg)}   /* flips right -> left */
 .face{position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 15px;box-shadow:var(--shadow);display:flex;flex-direction:column}
 .face.back{transform:rotateY(180deg)}
-.pivwrap{flex:1;overflow:auto;margin-top:8px}
+.pivwrap{flex:1;overflow:hidden;margin-top:8px;min-height:0;display:flex}
+.pivwrap .hmwrap{max-height:100%;flex:1}
 /* ---- 3D pie: perspective tilt + drop shadow gives real depth ---- */
-.pie3d{position:relative;flex:1;min-height:0;margin-top:4px;perspective:850px;display:flex;align-items:center;justify-content:center}
+.pie3d{position:relative;flex:1 1 auto;min-height:158px;margin-top:4px;perspective:850px;display:flex;align-items:center;justify-content:center}
 /* soft neumorphic glow behind the disc */
 .pie3d::before{content:"";position:absolute;width:64%;height:64%;border-radius:50%;
   background:radial-gradient(circle, rgba(79,70,229,.16), transparent 68%);filter:blur(16px);z-index:0}
@@ -157,7 +184,7 @@ a{color:inherit}
 .pietip{position:fixed;display:none;z-index:60;background:#0E1728;color:#fff;font-size:11.5px;
   padding:6px 9px;border-radius:7px;pointer-events:none;box-shadow:0 6px 18px rgba(16,23,40,.3);white-space:nowrap}
 .pietip b{font-weight:600}
-.legend{display:flex;flex-wrap:wrap;gap:5px 10px;justify-content:center;margin-top:10px;font-size:10.5px;color:var(--muted);flex-shrink:0}
+.legend{display:flex;flex-wrap:wrap;gap:5px 10px;justify-content:center;margin-top:10px;font-size:10.5px;color:var(--muted);flex-shrink:0;max-height:58px;overflow-y:auto;overscroll-behavior:contain}
 .legend .lg{display:inline-flex;align-items:center;gap:4px}
 .legend i{width:8px;height:8px;border-radius:2px;display:inline-block;flex-shrink:0}
 .legend b{color:var(--ink);font-weight:600}
@@ -638,6 +665,7 @@ a{color:inherit}
   <div id="jBody" style="max-height:66vh;overflow:auto;margin-top:6px"></div>
   <div style="text-align:right;margin-top:14px"><button class="btn" onclick="document.getElementById('journeyModal').classList.remove('on')">Close</button></div>
 </div></div>
+<div id="hmTip"></div>
 <div class="modal-bg" id="chanModal"><div class="modal" style="max-width:680px">
   <h3 id="chTitle">Channel</h3>
   <div id="chBody" style="max-height:70vh;overflow:auto;margin-top:8px"></div>
@@ -1117,49 +1145,94 @@ const SRC_ICON={'Instagram':'📷','Facebook / Meta':'📘','Meta Ads':'📣','G
 // Green funnel palette (deep -> pale), matching the reference design.
 const FUNNEL_COLORS=['#2E9E77','#46B189','#63C29D','#84D2B2','#A6E0C7','#C3EAD8','#D9F2E7','#E8F7F0','#F1FAF6'];
 let SRC_ROWS=[];
+/* ---------- Heatmap hover summary -------------------------------------- */
+// One delegated listener: cells carry their summary in data-tip ("a||b||c").
+(function(){
+  let tip;
+  const show=(el,x,y)=>{
+    if(!tip){ tip=document.getElementById('hmTip'); if(!tip) return; }
+    const parts=(el.dataset.tip||'').split('||');
+    tip.innerHTML='<b>'+parts[0]+'</b>'+parts.slice(1).join('<br>');
+    tip.style.display='block';
+    const r=tip.getBoundingClientRect();
+    tip.style.left=Math.min(x+14, innerWidth-r.width-10)+'px';
+    tip.style.top =Math.min(y+14, innerHeight-r.height-10)+'px';
+  };
+  addEventListener('mousemove',e=>{
+    const c=e.target.closest && e.target.closest('.hcell[data-tip]');
+    if(c) show(c,e.clientX,e.clientY);
+    else if(tip) tip.style.display='none';
+  },{passive:true});
+  addEventListener('scroll',()=>{ if(tip) tip.style.display='none'; },{passive:true,capture:true});
+})();
+
+/* ---------- Treemap ----------------------------------------------------- */
+// Squarified treemap (Bruls/Huizing/van Wijk): lays rectangles out so their
+// aspect ratios stay near 1, which is what makes the areas comparable by eye.
+function squarify(items,x,y,w,h,out){
+  if(!items.length) return out;
+  const total=items.reduce((a,i)=>a+i.v,0);
+  if(total<=0||w<=0||h<=0) return out;
+  const worst=(row,len,scale)=>{
+    const sum=row.reduce((a,r)=>a+r.v,0)*scale;
+    const mx=Math.max(...row.map(r=>r.v))*scale, mn=Math.min(...row.map(r=>r.v))*scale;
+    return Math.max((len*len*mx)/(sum*sum),(sum*sum)/(len*len*mn));
+  };
+  let rest=items.slice(), cx=x, cy=y, cw=w, ch=h;
+  while(rest.length){
+    const vertical=cw>=ch, len=vertical?ch:cw;
+    const area=cw*ch, sumRest=rest.reduce((a,i)=>a+i.v,0), scale=area/sumRest;
+    let row=[rest[0]], i=1;
+    while(i<rest.length && worst(row.concat(rest[i]),len,scale)<=worst(row,len,scale)){ row.push(rest[i]); i++; }
+    const rowSum=row.reduce((a,r)=>a+r.v,0)*scale, thick=rowSum/len;
+    let off=0;
+    row.forEach(r=>{
+      const frac=(r.v*scale)/rowSum, seg=len*frac;
+      out.push(vertical ? {...r,x:cx,y:cy+off,w:thick,h:seg} : {...r,x:cx+off,y:cy,w:seg,h:thick});
+      off+=seg;
+    });
+    if(vertical){ cx+=thick; cw-=thick; } else { cy+=thick; ch-=thick; }
+    rest=rest.slice(row.length);
+    if(cw<=0.5||ch<=0.5) break;
+  }
+  return out;
+}
+const TM_COLORS=['#1F4E79','#2E7DA8','#3E9FB5','#4FB8A5','#63C29D','#8ACB8A','#B7D96F','#E0C96A','#E2A25C','#D97D5A','#C75C63','#A64D79'];
 function paintSources(rows){
   const el=document.getElementById('srcBox'); if(!el) return;
   if(!rows){ el.innerHTML='<div class="empty" style="padding:10px">Loading sources…</div>'; return; }
   if(!rows.length){ el.innerHTML='<div class="empty" style="padding:14px">No source data — run <b>sources.sql</b>.</div>'; return; }
   SRC_ROWS=rows;
   const total=rows.reduce((a,r)=>a+(+r[1]||0),0)||1;
-  // Group the long tail so the funnel stays readable, then draw one trapezoid per
-  // channel whose width tracks its share — sorted descending, so the stack forms
-  // the funnel silhouette naturally rather than faking the taper.
-  const top=rows.slice(0,8), rest=rows.slice(8);
-  const restSum=rest.reduce((a,r)=>a+(+r[1]||0),0);
-  const bands=top.map(r=>({name:r[0],v:+r[1]}));
-  if(restSum) bands.push({name:'Other ('+rest.length+')',v:restSum,_rest:true});
-
-  const W=520, capH=26, bandH=Math.max(34, Math.min(52, 300/bands.length)), cx=W/2;
-  const maxV=bands[0].v||1;
-  const widthAt=i=>{ const b=bands[Math.min(i,bands.length-1)]; return Math.max(70, W*0.94*(b.v/maxV)); };
-  const H=capH+bands.length*bandH+8;
-  let svg=`<svg class="funnelsvg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Traffic sources funnel">`;
-  // dark cap ellipse (the reference's 3-D top)
-  svg+=`<ellipse cx="${cx}" cy="${capH}" rx="${widthAt(0)/2}" ry="${capH*0.62}" fill="#1F3D57"/>`;
-  bands.forEach((b,i)=>{
-    const wTop=widthAt(i), wBot=widthAt(i+1)*(i===bands.length-1?0.82:1);
-    const y=capH+i*bandH, y2=y+bandH;
-    const pts=`${cx-wTop/2},${y} ${cx+wTop/2},${y} ${cx+wBot/2},${y2} ${cx-wBot/2},${y2}`;
-    const pct=(b.v/total*100);
-    const fill=FUNNEL_COLORS[Math.min(i,FUNNEL_COLORS.length-1)];
-    const dark=i>=4;
-    svg+=`<polygon class="fband" data-ch="${esc(b.name)}" points="${pts}" fill="${fill}"
-        style="animation-delay:${i*70}ms" onclick="${b._rest?'':`showChannel('${escq(b.name)}')`}">
-        <title>${esc(b.name)} · ${b.v.toLocaleString()} visitors (${pct.toFixed(1)}%)</title></polygon>`;
-    if(bandH>=30) svg+=`<text class="flabel ${dark?'dark':''}" x="${cx}" y="${y+bandH/2+4}" text-anchor="middle">${esc(b.name.toUpperCase())} · ${pct.toFixed(1)}%</text>`;
-  });
-  svg+='</svg>';
-
-  const key='<div class="fkey">'+rows.map((r,i)=>{
-    const [ch,vis,views]=r, pct=vis/total*100;
-    return `<button onclick="showChannel('${escq(ch)}')" title="See full report for ${esc(ch)}">
-      <span class="sw" style="background:${FUNNEL_COLORS[Math.min(i,FUNNEL_COLORS.length-1)]}"></span>
-      <span class="nm">${SRC_ICON[ch]||'•'} ${esc(ch)}</span>
-      <span class="vl">${(+vis).toLocaleString()} · ${pct.toFixed(1)}%</span></button>`;
-  }).join('')+'</div>';
-  el.innerHTML=svg+key;
+  const items=rows.map((r,i)=>({name:r[0],v:+r[1]||0,views:+r[2]||0,i})).filter(d=>d.v>0);
+  el.innerHTML='<div class="tmwrap" id="tmBox"></div>'
+    + '<div class="fkey">'+rows.map((r,i)=>{
+        const [ch,vis]=r, pct=vis/total*100;
+        return `<button onclick="showChannel('${escq(ch)}')" title="Full report for ${esc(ch)}">
+          <span class="sw" style="background:${TM_COLORS[i%TM_COLORS.length]}"></span>
+          <span class="nm">${SRC_ICON[ch]||'•'} ${esc(ch)}</span>
+          <span class="vl">${(+vis).toLocaleString()} · ${pct.toFixed(1)}%</span></button>`;
+      }).join('')+'</div>';
+  const draw=()=>{
+    const box=document.getElementById('tmBox'); if(!box) return;
+    const W=box.clientWidth||600, H=box.clientHeight||340;
+    const laid=squarify(items.slice().sort((a,b)=>b.v-a.v),0,0,W,H,[]);
+    box.innerHTML=laid.map(n=>{
+      const pct=(n.v/total*100), col=TM_COLORS[n.i%TM_COLORS.length];
+      const showText=n.w>62&&n.h>30;
+      return `<div class="tmnode" style="left:${n.x}px;top:${n.y}px;width:${n.w}px;height:${n.h}px;
+        background:${col};color:#fff;animation-delay:${Math.min(n.i*45,420)}ms"
+        onclick="showChannel('${escq(n.name)}')"
+        data-tip="${esc(n.name)}||${n.v.toLocaleString()} visitors||${n.views.toLocaleString()} page views||${pct.toFixed(1)}% of traffic||click for the full report">
+        ${showText?`<div class="tn">${esc(n.name)}</div><div class="tv">${n.v.toLocaleString()} · ${pct.toFixed(1)}%</div>`:''}
+      </div>`;
+    }).join('');
+    // reuse the heatmap tooltip for treemap tiles
+    box.querySelectorAll('.tmnode').forEach(t=>t.classList.add('hcell'));
+  };
+  draw();
+  clearTimeout(paintSources._t);
+  addEventListener('resize',()=>{ clearTimeout(paintSources._t); paintSources._t=setTimeout(draw,180); },{once:true});
 }
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const escq=s=>String(s??'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
@@ -1939,9 +2012,27 @@ function pivotHTML(dim){
   const grand=+PIVOT_DATA.total||catList.reduce((a,k)=>a+cats[k]._t,0);
   const title={device:'Device',os:'OS',net:'Network',ref:'Source'}[dim];
   const f=n=>(+n).toLocaleString();
-  let h=`<table class="piv"><thead><tr><th>${title}</th>${groups.map(g=>`<th class="m">${g}</th>`).join('')}<th class="m">Total</th></tr></thead><tbody>`;
-  catList.forEach(c=>{ h+=`<tr><td>${c}</td>${groups.map(g=>`<td class="cell mono">${f(cats[c][g]||0)}</td>`).join('')}<td class="cell mono"><b>${f(cats[c]._t)}</b></td></tr>`; });
-  h+=`<tr class="avg"><td>Total</td>${groups.map(g=>`<td class="cell mono">${f(colTot[g]||0)}</td>`).join('')}<td class="cell mono"><b>${f(grand)}</b></td></tr></tbody></table>`;
+  // HEATMAP, not a plain grid: colour encodes volume so the pattern is readable
+  // without reading every number, and the header row + first column are sticky so
+  // they stay put while scrolling (previously they scrolled away with the data).
+  const maxCell=Math.max(1,...catList.map(c=>Math.max(...groups.map(g=>cats[c][g]||0))));
+  const shade=v=>{ if(!v) return 'background:transparent';
+    const t=Math.pow(v/maxCell,0.45);                       // gamma so small values stay visible
+    return `background:rgba(99,91,255,${(0.06+t*0.82).toFixed(3)});color:${t>0.55?'#fff':'inherit'}`; };
+  let h=`<div class="hmwrap"><table class="hm"><thead><tr><th class="hcorner">${title}</th>`
+      + groups.map(g=>`<th>${g}</th>`).join('') + `<th class="tot">Total</th></tr></thead><tbody>`;
+  catList.forEach(c=>{
+    h+=`<tr><th class="hrow" title="${esc(c)}">${esc(c)}</th>`;
+    groups.forEach(g=>{
+      const v=cats[c][g]||0;
+      const rp=cats[c]._t?(v/cats[c]._t*100):0, cp=colTot[g]?(v/colTot[g]*100):0, tp=grand?(v/grand*100):0;
+      h+=`<td class="hcell" style="${shade(v)}" data-tip="${esc(c)} · ${esc(g)}||${f(v)} views||${rp.toFixed(1)}% of ${esc(c)}||${cp.toFixed(1)}% of ${esc(g)}||${tp.toFixed(1)}% of all traffic">${v?f(v):'·'}</td>`;
+    });
+    h+=`<td class="hcell tot">${f(cats[c]._t)}</td></tr>`;
+  });
+  h+=`<tr class="hfoot"><th class="hrow">Total</th>`
+    + groups.map(g=>`<td class="hcell tot">${f(colTot[g]||0)}</td>`).join('')
+    + `<td class="hcell tot">${f(grand)}</td></tr></tbody></table></div>`;
   return h;
 }
 function refreshPivots(){
