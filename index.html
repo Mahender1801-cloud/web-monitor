@@ -752,16 +752,30 @@ function go(id){
 }
 // Desktop: collapse the sidebar to a logo rail. Mobile: fall back to the overlay
 // drawer, since there is no room for a rail. Choice persists across visits.
+// The grid width and nav fade are applied INLINE rather than via a .railed CSS
+// rule: another stylesheet rule was winning over `.app.railed`, so the sidebar
+// kept its 240px column even though the class was set. Inline styles can't lose.
+function applyRail(on){
+  const app=document.querySelector('.app'); if(!app) return;
+  app.classList.toggle('railed',on);
+  app.style.gridTemplateColumns = on ? '60px 1fr' : '240px 1fr';
+  document.querySelectorAll('.side .navgrp,.side .side-foot').forEach(el=>{
+    el.style.opacity = on ? '0' : '1';
+    el.style.pointerEvents = on ? 'none' : '';
+  });
+  const bt=document.querySelector('.brandtext'); if(bt) bt.style.display = on ? 'none' : '';
+  const bb=document.querySelector('.brandbtn'); if(bb) bb.style.justifyContent = on ? 'center' : '';
+}
 function toggleRail(){
   if(matchMedia('(max-width:900px)').matches){ toggleSide(); return; }
-  const app=document.querySelector('.app');
-  const on=!app.classList.contains('railed');
-  app.classList.toggle('railed',on);
+  const on=!document.querySelector('.app').classList.contains('railed');
+  applyRail(on);
   try{ localStorage.setItem('_rail', on?'1':'0'); }catch{}
 }
 function initRail(){
-  try{ if(localStorage.getItem('_rail')==='1' && !matchMedia('(max-width:900px)').matches)
-    document.querySelector('.app').classList.add('railed'); }catch{}
+  try{ if(localStorage.getItem('_rail')==='1' && !matchMedia('(max-width:900px)').matches) applyRail(true); }catch{}
+  // Leaving the rail on a narrow screen would strand the menu — reset it there.
+  addEventListener('resize',()=>{ if(matchMedia('(max-width:900px)').matches) applyRail(false); });
 }
 function toggleSide(force){
   const open = force!==undefined ? force : !document.getElementById('side').classList.contains('open');
