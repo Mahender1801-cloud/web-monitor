@@ -480,6 +480,8 @@ a{color:inherit}
       <!-- VISITORS -->
       <section class="view" data-view="visitors">
         <div class="grid g4" id="visTiles"></div>
+        <div class="section-h"><h2>How visitors arrive</h2><span>traffic source · same window</span></div>
+        <div id="srcBox" style="margin-bottom:8px"></div>
         <div class="section-h"><h2>Recent visitors</h2><span id="visNote">every visitor’s footprint · click a row to see their page-by-page path</span></div>
         <div class="wv"><table>
           <thead><tr><th>Last seen</th><th>Entry page</th><th>Source</th><th class="m">Pages</th><th class="m">Engaged</th><th class="m">Device</th><th>Journey</th></tr></thead>
@@ -964,9 +966,28 @@ function renderPurchases(){
 
 // Full page-by-page journey for one buyer, fetched fresh by GA client id (indexed,
 // cheap) so it is COMPLETE — not limited to the ~500 rows held in the browser.
+const SRC_ICON={'Instagram':'📷','Facebook / Meta':'📘','Shared link':'🔗','Google':'🔍','YouTube':'▶️','Other search':'🔎','Direct':'➡️','Internal':'🏠','Other referral':'🌐'};
+function paintSources(rows){
+  const el=document.getElementById('srcBox'); if(!el) return;
+  if(!rows){ el.innerHTML='<div class="empty" style="padding:10px">Loading sources…</div>'; return; }
+  if(!rows.length){ el.innerHTML='<div class="empty" style="padding:14px">No source data — run <b>sources.sql</b>.</div>'; return; }
+  const total=rows.reduce((a,r)=>a+(+r[1]||0),0)||1;
+  el.innerHTML='<div style="display:flex;flex-direction:column;gap:7px">'+rows.map(r=>{
+    const [ch,vis]=r; const pct=vis/total*100;
+    return `<div style="display:flex;align-items:center;gap:10px">
+      <div style="width:140px;font-size:12.5px;color:var(--muted);text-align:right">${SRC_ICON[ch]||'•'} ${ch}</div>
+      <div style="flex:1;background:rgba(0,0,0,.06);border-radius:6px;height:24px">
+        <div style="width:${Math.max(1.5,pct)}%;height:100%;background:var(--ink,#222);border-radius:6px"></div>
+      </div>
+      <div style="width:130px;font-size:12px" class="mono">${(+vis).toLocaleString()} · ${pct.toFixed(1)}%</div>
+    </div>`;
+  }).join('')+'</div>';
+}
+
 function renderVisitors(){
   const cur=windowRange();
   const tiles=document.getElementById('visTiles'), body=document.getElementById('visBody');
+  paintSources(null); fetchSources(cur.from,cur.to).then(r=>{ if(curView==='visitors') paintSources(r||[]); });
   const paintT=(rows)=>{
     if(!rows){ tiles.innerHTML=''; return; }
     const total=rows.length, withGa=rows.filter(r=>r[1]==='ga').length;
@@ -1233,6 +1254,7 @@ const fetchPageDaily =(f,t)=>cachedRpc('dash_page_daily',{p_from:iso(f),p_to:iso
 const fetchShopStats =(f,t)=>cachedRpc('shop_stats',     {p_from:iso(f),p_to:iso(t)},            'shop_'+f+'_'+t);
 const fetchFunnel    =(f,t)=>cachedRpc('funnel_stats',   {p_from:iso(f),p_to:iso(t)},            'fun_'+f+'_'+t);
 const fetchVisitors  =(f,t)=>cachedRpc('recent_visitors',{p_from:iso(f),p_to:iso(t),p_limit:150},'vis_'+f+'_'+t);
+const fetchSources   =(f,t)=>cachedRpc('traffic_sources', {p_from:iso(f),p_to:iso(t)},            'src_'+f+'_'+t);
 async function refreshStats(from,to,k){
   try{
     const {data,error}=await sb.rpc('dash_stats',{p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString()});
