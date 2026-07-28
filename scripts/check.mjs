@@ -494,6 +494,16 @@ async function runAuto(key, monitor, homepage) {
   // 0b) Shopify: the complete, reliable order feed -> shop_orders
   await pullShopify();
 
+  // 0c) Refresh the daily RUM rollup (today + yesterday). The dashboard reads
+  //     these pre-aggregated rows instead of scanning ~250k raw events, which is
+  //     what keeps Summary/pivots fast as the table grows.
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/rum_rollup_refresh`, {
+      method: 'POST', headers: H, body: JSON.stringify({ p_days: 2 })
+    });
+    console.log(r.ok ? `Rollup refreshed (${await r.text()} days).` : `Rollup refresh: ${r.status} ${(await r.text()).slice(0,150)}`);
+  } catch (e) { console.error('Rollup refresh failed:', e.message); }
+
   // 1) PageSpeed for every monitor, mobile + desktop
   const psiRows = [];
   for (const mon of monitors) {
