@@ -61,18 +61,23 @@ function timeOnPage() { return Math.round(engagedMs + (visStart !== null ? perfo
 // EVERY order back to its full page-by-page journey server-side (via the webhook),
 // even when the consent-gated checkout pixel never fires. Runs once per visit.
 // ============================================================================
-function stampCart(force) {
+function stampCart() {
   try {
-    if (!force && sessionStorage.getItem('_rum_stamped')) return;
-    // keepalive: without it, a fast add-to-cart -> checkout flow can abort this
-    // request mid-flight on navigation, silently dropping the order's journey link.
+    // Stamped on EVERY page view, not once per visit. Shopify does not reliably
+    // persist attributes written to an EMPTY cart, so a single stamp on the
+    // landing page was frequently lost — which is why most orders came through
+    // with no journey link. Re-stamping is one tiny POST and guarantees the
+    // attribute is present on whatever cart exists when they check out.
+    // keepalive: survives the navigation of a fast add-to-cart -> checkout flow.
     fetch('/cart/update.js', {
       method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ attributes: { _rum_sid: sessionId, _rum_gid: gaClientId || '' } })
-    }).then(() => { try { sessionStorage.setItem('_rum_stamped', '1'); } catch {} }).catch(() => {});
+    }).catch(() => {});
   } catch {}
 }
 stampCart();
+// Re-stamp when the shopper returns to the tab — covers carts built in another tab.
+addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') stampCart(); });
 
 // ============================================================================
 // FUNNEL EVENTS — a light beacon for the steps that aren't page views
@@ -96,13 +101,13 @@ const _fetch = window.fetch;
 window.fetch = function (...args) {
   try {
     const u = (args[0] && args[0].url) || args[0] || '';
-    if (/\/cart\/add(\.js)?/.test(String(u))) { sendEvent('add_to_cart'); stampCart(true); }
+    if (/\/cart\/add(\.js)?/.test(String(u))) { sendEvent('add_to_cart'); stampCart(); }
   } catch {}
   return _fetch.apply(this, args);
 };
 const _open = XMLHttpRequest.prototype.open;
 XMLHttpRequest.prototype.open = function (method, url) {
-  try { if (/\/cart\/add(\.js)?/.test(String(url))) this.addEventListener('load', () => { sendEvent('add_to_cart'); stampCart(true); }); } catch {}
+  try { if (/\/cart\/add(\.js)?/.test(String(url))) this.addEventListener('load', () => { sendEvent('add_to_cart'); stampCart(); }); } catch {}
   return _open.apply(this, arguments);
 };
 // Non-AJAX add-to-cart forms + the cart form's checkout submit.
@@ -114,12 +119,12 @@ addEventListener('submit', (e) => {
   try {
     const f = e.target; if (!f) return;
     const action = f.action || '';
-    if (/\/cart\/add/.test(action)) { sendEvent('add_to_cart'); stampCart(true); return; }
+    if (/\/cart\/add/.test(action)) { sendEvent('add_to_cart'); stampCart(); return; }
     // Shopify's cart form posts to /cart with a <button name="checkout"> submitter
     const sub = e.submitter;
     if (/\/cart(\?|$|\/)/.test(action) &&
         ((sub && (sub.name === 'checkout' || /checkout/i.test(sub.value || ''))) || f.querySelector('[name="checkout"]'))) {
-      sendEvent('checkout_click'); stampCart(true);
+      sendEvent('checkout_click'); stampCart();
     }
   } catch {}
 }, { capture: true, passive: true });
@@ -140,7 +145,7 @@ function isCheckoutTarget(t) {
   } catch { return false; }
 }
 addEventListener('click', (e) => {
-  try { if (isCheckoutTarget(e.target)) { sendEvent('checkout_click'); stampCart(true); } } catch {}
+  try { if (isCheckoutTarget(e.target)) { sendEvent('checkout_click'); stampCart(); } } catch {}
 }, { capture: true, passive: true });
 
 // Cart-viewed intent: on drawer-cart themes there is no /cart page navigation to

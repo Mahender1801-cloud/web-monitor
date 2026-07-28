@@ -30,7 +30,40 @@ button{font-family:inherit;cursor:pointer}
 a{color:inherit}
 
 /* layout */
-.app{display:grid;grid-template-columns:240px 1fr;min-height:100vh}
+.app{display:grid;grid-template-columns:240px 1fr;min-height:100vh;transition:grid-template-columns .22s cubic-bezier(.4,0,.2,1)}
+/* Collapsed rail (desktop): the sidebar shrinks to the logo button, like Claude/ChatGPT */
+.app.railed{grid-template-columns:60px 1fr}
+.app.railed .side .navgrp,.app.railed .side .side-foot{opacity:0;pointer-events:none}
+.app.railed .brandtext{display:none}
+.app.railed .brandbtn{justify-content:center;padding:16px 0 12px}
+.side .navgrp,.side .side-foot{transition:opacity .15s}
+.brandbtn{width:100%;background:none;border:0;border-bottom:1px solid transparent;cursor:pointer;text-align:left;display:flex;align-items:center;gap:11px;padding:18px 18px 13px;border-radius:0;transition:background .15s}
+.brandbtn:hover{background:rgba(0,0,0,.035)}
+.brandtext b{font-family:'Space Grotesk';font-weight:700;font-size:14.5px;letter-spacing:-.01em;display:block;line-height:1.15}
+.brandtext span{display:block;font-size:10.5px;color:var(--faint);font-weight:500;margin-top:2px;letter-spacing:.04em}
+.hlogo{flex-shrink:0;display:block}
+/* ---- Traffic funnel (Visitors tab) ------------------------------------- */
+.funnelwrap{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap;margin-bottom:6px}
+.funnelsvg{flex:1 1 380px;min-width:300px;max-width:560px;overflow:visible}
+.fband{cursor:pointer;transition:opacity .18s,transform .18s;transform-origin:center;
+  animation:fgrow .5s cubic-bezier(.2,.9,.3,1) both}
+.fband:hover{opacity:.86}
+.fband.dim{opacity:.35}
+@keyframes fgrow{from{opacity:0;transform:scaleX(.25)}to{opacity:1;transform:scaleX(1)}}
+.flabel{font-size:11.5px;font-weight:600;fill:#fff;pointer-events:none;letter-spacing:.02em}
+.flabel.dark{fill:#18463a}
+.fkey{flex:1 1 220px;min-width:200px;font-size:12.5px}
+.fkey button{display:flex;align-items:center;gap:9px;width:100%;background:none;border:0;padding:6px 8px;
+  border-radius:8px;cursor:pointer;text-align:left;transition:background .15s;color:inherit;font-size:12.5px}
+.fkey button:hover{background:rgba(0,0,0,.05)}
+.fkey .sw{width:11px;height:11px;border-radius:3px;flex-shrink:0}
+.fkey .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fkey .vl{font-family:ui-monospace,Menlo,monospace;color:var(--muted);font-size:11.5px}
+.repgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:14px}
+.repcard{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:13px 15px}
+.repcard h4{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--faint);margin:0 0 6px;font-weight:600}
+.repcard .v{font-family:'Space Grotesk';font-size:21px;font-weight:600;letter-spacing:-.02em}
+.repcard .s{font-size:11px;color:var(--faint);margin-top:2px}
 .side{background:var(--surface);border-right:1px solid var(--line);position:sticky;top:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
 .brand{padding:20px 20px 14px;display:flex;align-items:center;gap:11px}
 .lens{width:26px;height:26px;border-radius:50%;background:conic-gradient(from 210deg,var(--accent),#8B84F5,var(--accent));position:relative;box-shadow:inset 0 0 0 2px #fff, inset 0 0 0 3px var(--accent)}
@@ -309,7 +342,20 @@ a{color:inherit}
 <div class="app">
   <!-- SIDEBAR -->
   <aside class="side" id="side">
-    <div class="brand"><div class="lens"></div><div><b>Site Monitor</b><span>Hashtag Eyewear</span></div></div>
+    <!-- Brand doubles as the sidebar toggle (Claude/ChatGPT style). Collapsed it
+         shows the Hashtag mark alone; expanded it shows the full lockup. -->
+    <button class="brandbtn" id="brandBtn" onclick="toggleRail()" title="Hide / show menu" aria-label="Toggle sidebar">
+      <svg class="hlogo" id="hlogoMark" width="30" height="30" viewBox="0 0 100 100" aria-hidden="true">
+        <circle cx="50" cy="50" r="50" fill="#F26B0F"/>
+        <g fill="#fff">
+          <path d="M36.5 12 L48 12 L36 88 L24.5 88 Z"/>
+          <path d="M64.5 12 L76 12 L64 88 L52.5 88 Z"/>
+          <rect x="10" y="30" width="80" height="11.5" rx="5.75" transform="rotate(-7 50 35.75)"/>
+          <rect x="10" y="58" width="80" height="11.5" rx="5.75" transform="rotate(-7 50 63.75)"/>
+        </g>
+      </svg>
+      <span class="brandtext"><b>Site Monitor</b><span>HASHTAG EYEWEAR</span></span>
+    </button>
     <div class="navgrp" id="nav"></div>
     <div class="side-foot" id="foot">Sample mode · not connected</div>
   </aside>
@@ -480,8 +526,10 @@ a{color:inherit}
       <!-- VISITORS -->
       <section class="view" data-view="visitors">
         <div class="grid g4" id="visTiles"></div>
-        <div class="section-h"><h2>How visitors arrive</h2><span>traffic source · same window</span></div>
-        <div id="srcBox" style="margin-bottom:8px"></div>
+        <div class="section-h"><h2>How visitors arrive</h2><span>click any band for that channel’s full report</span></div>
+        <div id="srcBox" class="funnelwrap"></div>
+        <div class="section-h"><h2>Visitor behaviour</h2><span id="vrNote">engagement &amp; journey depth · same window</span></div>
+        <div id="visReport"></div>
         <div class="section-h"><h2>Recent visitors</h2><span id="visNote">every visitor’s footprint · click a row to see their page-by-page path</span></div>
         <div class="wv"><table>
           <thead><tr><th>Last seen</th><th>Entry page</th><th>Source</th><th class="m">Pages</th><th class="m">Engaged</th><th class="m">Device</th><th>Journey</th></tr></thead>
@@ -582,6 +630,11 @@ a{color:inherit}
   <h3 id="jTitle">Buyer journey</h3>
   <div id="jBody" style="max-height:66vh;overflow:auto;margin-top:6px"></div>
   <div style="text-align:right;margin-top:14px"><button class="btn" onclick="document.getElementById('journeyModal').classList.remove('on')">Close</button></div>
+</div></div>
+<div class="modal-bg" id="chanModal"><div class="modal" style="max-width:680px">
+  <h3 id="chTitle">Channel</h3>
+  <div id="chBody" style="max-height:70vh;overflow:auto;margin-top:8px"></div>
+  <div style="text-align:right;margin-top:14px"><button class="btn" onclick="document.getElementById('chanModal').classList.remove('on')">Close</button></div>
 </div></div>
 
 <script>
@@ -697,6 +750,19 @@ function go(id){
   }
   toggleSide(false);
 }
+// Desktop: collapse the sidebar to a logo rail. Mobile: fall back to the overlay
+// drawer, since there is no room for a rail. Choice persists across visits.
+function toggleRail(){
+  if(matchMedia('(max-width:900px)').matches){ toggleSide(); return; }
+  const app=document.querySelector('.app');
+  const on=!app.classList.contains('railed');
+  app.classList.toggle('railed',on);
+  try{ localStorage.setItem('_rail', on?'1':'0'); }catch{}
+}
+function initRail(){
+  try{ if(localStorage.getItem('_rail')==='1' && !matchMedia('(max-width:900px)').matches)
+    document.querySelector('.app').classList.add('railed'); }catch{}
+}
 function toggleSide(force){
   const open = force!==undefined ? force : !document.getElementById('side').classList.contains('open');
   document.getElementById('side').classList.toggle('open', open);
@@ -771,8 +837,12 @@ async function runLighthouse(){
     const j=await r.json();
     if(j.error){
       const q=j.error.code===429||/quota|rate/i.test(j.error.message||'');
+      // The keyless PSI quota is tiny and shared, so a live run often 429s. The
+      // GitHub Action already audits every monitored page 5x/day and stores the
+      // result — fall back to that instead of showing the user a dead end.
+      if(q && await showStoredPSI(rep, url)) return;
       rep.innerHTML=`<div class="card"><div class="empty">${q
-        ?'PageSpeed rate limit hit (keyless quota). Add a free Google PSI API key above and run again.<br><span style="font-size:11px">Get one at console.cloud.google.com → enable “PageSpeed Insights API” → create an API key.</span>'
+        ?'PageSpeed rate limit hit (keyless quota), and no stored audit exists for this URL yet.<br><span style="font-size:11px">Add a free PSI API key above for on-demand runs, or add this page under <b>Monitors</b> — the scheduled job audits it 5×/day.</span>'
         :'Lighthouse failed: '+j.error.message}</div></div>`;
       return;
     }
@@ -780,6 +850,41 @@ async function runLighthouse(){
   }catch(e){ rep.innerHTML='<div class="card"><div class="empty">Could not run Lighthouse: '+e.message+'</div></div>'; }
   finally{ btn.textContent=orig; btn.disabled=false; }
 }
+// Show the most recent stored Lighthouse audit (written by the scheduled job) for
+// this URL + strategy. Returns true if something was rendered.
+async function showStoredPSI(rep, url){
+  if(!(LIVE&&sb)) return false;
+  try{
+    const host=(u)=>{ try{ return new URL(u).host.replace(/^www\./,''); }catch{ return u; } };
+    const {data}=await sb.from('psi_results')
+      .select('url,strategy,perf_score,lcp_lab,tbt_lab,cls_lab,lcp_crux,inp_crux,cls_crux,created_at')
+      .eq('strategy',labStrategy).order('created_at',{ascending:false}).limit(60);
+    const row=(data||[]).find(r=>host(r.url)===host(url) && r.perf_score!=null) || null;
+    if(!row) return false;
+    const age=Math.round((Date.now()-+new Date(row.created_at))/36e5);
+    const cls=s=>s==null?'na':(s>=90?'good':s>=50?'warn':'poor');
+    const m=(label,v,f)=>`<div style="flex:1;min-width:120px"><div style="font-size:10.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.06em">${label}</div>
+      <div class="mono" style="font-size:17px;margin-top:2px">${v==null?'—':f(v)}</div></div>`;
+    rep.innerHTML=`<div class="card">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div class="metric ${cls(row.perf_score)}" style="font-size:34px;color:var(--${cls(row.perf_score)==='good'?'good':cls(row.perf_score)==='warn'?'warn':'poor'})">${row.perf_score??'—'}</div>
+        <div><b>Stored Lighthouse audit</b><div style="font-size:11.5px;color:var(--muted)">
+          ${esc(row.url)} · ${esc(row.strategy)} · ${age<1?'just now':age+'h ago'}</div></div>
+      </div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:14px">
+        ${m('LCP (lab)',row.lcp_lab,fmtMs)}${m('TBT (lab)',row.tbt_lab,fmtMs)}
+        ${m('CLS (lab)',row.cls_lab,v=>(+v).toFixed(3))}
+        ${m('LCP (field)',row.lcp_crux,fmtMs)}${m('INP (field)',row.inp_crux,fmtMs)}
+        ${m('CLS (field)',row.cls_crux,v=>(+v).toFixed(3))}
+      </div>
+      <div style="margin-top:12px;font-size:11.5px;color:var(--faint)">
+        Live PageSpeed is rate-limited without an API key, so this is the latest audit from your scheduled job (runs 5×/day).
+        Add a PSI key above to run a fresh audit on demand.</div>
+    </div>`;
+    return true;
+  }catch{ return false; }
+}
+const kb=v=>v==null?'—':(v>=1024?(v/1024).toFixed(1)+' MB':Math.round(v)+' KB');
 function lighthouseHTML(j,url){
   const lh=j.lighthouseResult, cats=lh.categories, a=lh.audits;
   const ring=(cat,name)=>{ if(!cat) return '';
@@ -863,7 +968,7 @@ function scoreCardHTML(r){
     </div>
     <div class="wsmetrics">
       ${row('Server response',m.ttfb_ms+'ms')}${row('Full load',m.load_ms+'ms')}
-      ${row('Page weight',(m.weight_kb||0).toLocaleString()+' KB')}${row('HTML size',m.html_kb+' KB')}
+      ${row('Page weight',kb(m.weight_kb))}${row('HTML size',kb(m.html_kb))}
       ${row('Render-blocking',m.render_blocking)}${row('3rd-party scripts',m.third_party_scripts)}
       ${row('Compression',m.compression)}${row('HTTPS',m.https?'✓':'✗')}
       ${row('Images w/ alt',m.images_with_alt+' / '+m.images)}${row('Schema (JSON-LD)',m.schema?'✓':'✗')}
@@ -918,7 +1023,13 @@ function renderPurchases(){
           ['Linked to browsing', buys.length.toLocaleString(), 'orders with page-speed data (pixel)'],
         ]
       : [
-          ['Orders', s.orders.toLocaleString(), cur.label],
+          // NET orders only. Shopify writes returns as R-xxxx and exchanges as
+          // E-xxxx rows in this same feed; counting them as sales made the tile
+          // disagree with the table. They are reported separately instead.
+          ['Orders', s.orders.toLocaleString(),
+            (s.returns||s.exchanges)
+              ? `net · excl. ${s.returns||0} return${s.returns===1?'':'s'} + ${s.exchanges||0} exchange${s.exchanges===1?'':'s'}`
+              : cur.label],
           ['Revenue', money(+s.revenue), cur.label],
           ['Avg order value', money(s.aov==null?null:+s.aov), `${s.orders.toLocaleString()} orders`],
           // s.linked = accurate, window-wide count (shop_stats). Falls back to the
@@ -966,28 +1077,137 @@ function renderPurchases(){
 
 // Full page-by-page journey for one buyer, fetched fresh by GA client id (indexed,
 // cheap) so it is COMPLETE — not limited to the ~500 rows held in the browser.
-const SRC_ICON={'Instagram':'📷','Facebook / Meta':'📘','Shared link':'🔗','Google':'🔍','YouTube':'▶️','Other search':'🔎','Direct':'➡️','Internal':'🏠','Other referral':'🌐'};
+const SRC_ICON={'Instagram':'📷','Facebook / Meta':'📘','Meta Ads':'📣','Google Ads':'📣','Shared link':'🔗','Google':'🔍','YouTube':'▶️','Other search':'🔎','Direct':'➡️','Internal':'🏠','Other referral':'🌐'};
+// Green funnel palette (deep -> pale), matching the reference design.
+const FUNNEL_COLORS=['#2E9E77','#46B189','#63C29D','#84D2B2','#A6E0C7','#C3EAD8','#D9F2E7','#E8F7F0','#F1FAF6'];
+let SRC_ROWS=[];
 function paintSources(rows){
   const el=document.getElementById('srcBox'); if(!el) return;
   if(!rows){ el.innerHTML='<div class="empty" style="padding:10px">Loading sources…</div>'; return; }
   if(!rows.length){ el.innerHTML='<div class="empty" style="padding:14px">No source data — run <b>sources.sql</b>.</div>'; return; }
+  SRC_ROWS=rows;
   const total=rows.reduce((a,r)=>a+(+r[1]||0),0)||1;
-  el.innerHTML='<div style="display:flex;flex-direction:column;gap:7px">'+rows.map(r=>{
-    const [ch,vis]=r; const pct=vis/total*100;
-    return `<div style="display:flex;align-items:center;gap:10px">
-      <div style="width:140px;font-size:12.5px;color:var(--muted);text-align:right">${SRC_ICON[ch]||'•'} ${ch}</div>
-      <div style="flex:1;background:rgba(0,0,0,.06);border-radius:6px;height:24px">
-        <div style="width:${Math.max(1.5,pct)}%;height:100%;background:var(--ink,#222);border-radius:6px"></div>
-      </div>
-      <div style="width:130px;font-size:12px" class="mono">${(+vis).toLocaleString()} · ${pct.toFixed(1)}%</div>
-    </div>`;
+  // Group the long tail so the funnel stays readable, then draw one trapezoid per
+  // channel whose width tracks its share — sorted descending, so the stack forms
+  // the funnel silhouette naturally rather than faking the taper.
+  const top=rows.slice(0,8), rest=rows.slice(8);
+  const restSum=rest.reduce((a,r)=>a+(+r[1]||0),0);
+  const bands=top.map(r=>({name:r[0],v:+r[1]}));
+  if(restSum) bands.push({name:'Other ('+rest.length+')',v:restSum,_rest:true});
+
+  const W=520, capH=26, bandH=Math.max(34, Math.min(52, 300/bands.length)), cx=W/2;
+  const maxV=bands[0].v||1;
+  const widthAt=i=>{ const b=bands[Math.min(i,bands.length-1)]; return Math.max(70, W*0.94*(b.v/maxV)); };
+  const H=capH+bands.length*bandH+8;
+  let svg=`<svg class="funnelsvg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Traffic sources funnel">`;
+  // dark cap ellipse (the reference's 3-D top)
+  svg+=`<ellipse cx="${cx}" cy="${capH}" rx="${widthAt(0)/2}" ry="${capH*0.62}" fill="#1F3D57"/>`;
+  bands.forEach((b,i)=>{
+    const wTop=widthAt(i), wBot=widthAt(i+1)*(i===bands.length-1?0.82:1);
+    const y=capH+i*bandH, y2=y+bandH;
+    const pts=`${cx-wTop/2},${y} ${cx+wTop/2},${y} ${cx+wBot/2},${y2} ${cx-wBot/2},${y2}`;
+    const pct=(b.v/total*100);
+    const fill=FUNNEL_COLORS[Math.min(i,FUNNEL_COLORS.length-1)];
+    const dark=i>=4;
+    svg+=`<polygon class="fband" data-ch="${esc(b.name)}" points="${pts}" fill="${fill}"
+        style="animation-delay:${i*70}ms" onclick="${b._rest?'':`showChannel('${escq(b.name)}')`}">
+        <title>${esc(b.name)} · ${b.v.toLocaleString()} visitors (${pct.toFixed(1)}%)</title></polygon>`;
+    if(bandH>=30) svg+=`<text class="flabel ${dark?'dark':''}" x="${cx}" y="${y+bandH/2+4}" text-anchor="middle">${esc(b.name.toUpperCase())} · ${pct.toFixed(1)}%</text>`;
+  });
+  svg+='</svg>';
+
+  const key='<div class="fkey">'+rows.map((r,i)=>{
+    const [ch,vis,views]=r, pct=vis/total*100;
+    return `<button onclick="showChannel('${escq(ch)}')" title="See full report for ${esc(ch)}">
+      <span class="sw" style="background:${FUNNEL_COLORS[Math.min(i,FUNNEL_COLORS.length-1)]}"></span>
+      <span class="nm">${SRC_ICON[ch]||'•'} ${esc(ch)}</span>
+      <span class="vl">${(+vis).toLocaleString()} · ${pct.toFixed(1)}%</span></button>`;
   }).join('')+'</div>';
+  el.innerHTML=svg+key;
+}
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const escq=s=>String(s??'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+
+// Drill-down: one traffic channel in depth.
+async function showChannel(ch){
+  const modal=document.getElementById('chanModal'), body=document.getElementById('chBody');
+  document.getElementById('chTitle').textContent=(SRC_ICON[ch]||'•')+'  '+ch;
+  body.innerHTML='<div class="empty">Loading channel report…</div>';
+  modal.classList.add('on');
+  if(!(LIVE&&sb)){ body.innerHTML='<div class="empty">Not connected.</div>'; return; }
+  const cur=windowRange();
+  try{
+    const {data,error}=await sb.rpc('channel_detail',{p_from:iso(cur.from),p_to:iso(cur.to),p_channel:ch});
+    if(error) throw error;
+    const d=data||{};
+    const bounceRate=d.visitors?(d.bounced/d.visitors*100):null;
+    const cvr=d.visitors?(d.orders/d.visitors*100):null;
+    const card=(h,v,s)=>`<div class="repcard"><h4>${h}</h4><div class="v">${v}</div><div class="s">${s||''}</div></div>`;
+    let h=`<div class="repgrid">
+      ${card('Visitors',(d.visitors||0).toLocaleString(),cur.label)}
+      ${card('Page views',(d.views||0).toLocaleString(),(d.pages_avg??'—')+' per visitor')}
+      ${card('Avg engaged',(d.engaged_avg??'—')+'s','time on site')}
+      ${card('Bounced',bounceRate==null?'—':bounceRate.toFixed(1)+'%',(d.bounced||0)+' saw one page')}
+      ${card('LCP p75',d.lcp_p75==null?'—':fmtMs(+d.lcp_p75),'their load speed')}
+      ${card('Orders',(d.orders||0).toLocaleString(),cvr==null?'':cvr.toFixed(2)+'% conversion')}
+    </div>`;
+    const list=(title,arr,unit)=>{
+      if(!arr||!arr.length) return '';
+      const max=Math.max(...arr.map(a=>+a[1]))||1;
+      return `<div class="section-h" style="margin-top:6px"><h2 style="font-size:13px">${title}</h2></div>
+        <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:6px">`+arr.map(a=>`
+        <div style="display:flex;align-items:center;gap:9px;font-size:12px">
+          <div style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(a[0])}">${esc(a[0]||'/')}</div>
+          <div style="width:110px;background:rgba(0,0,0,.06);border-radius:5px;height:9px">
+            <div style="width:${(+a[1]/max*100).toFixed(1)}%;height:100%;background:#46B189;border-radius:5px"></div></div>
+          <div class="mono" style="width:52px;text-align:right;color:var(--muted)">${(+a[1]).toLocaleString()}</div>
+        </div>`).join('')+'</div>';
+    };
+    if(d.by_device&&d.by_device.length)
+      h+=`<div style="margin:4px 0 10px;font-size:12px;color:var(--muted)">Devices: `
+        +d.by_device.map(x=>`<span class="chip">${esc(cap(x[0]))} ${x[1]}</span>`).join(' ')+'</div>';
+    h+=list('Landing pages',d.top_entry);
+    h+=list('Most viewed pages',d.top_pages);
+    body.innerHTML=h;
+  }catch(e){ body.innerHTML='<div class="empty">Could not load: '+esc(e.message)+'<br><span style="font-size:11px">Run <b>visitor_report.sql</b> in Supabase.</span></div>'; }
+}
+
+// Visitor behaviour report (engagement + journey depth).
+function paintVisitorReport(d){
+  const el=document.getElementById('visReport'); if(!el) return;
+  if(!d){ el.innerHTML='<div class="empty" style="padding:10px">Loading report…</div>'; return; }
+  const card=(h,v,s)=>`<div class="repcard"><h4>${h}</h4><div class="v">${v}</div><div class="s">${s||''}</div></div>`;
+  const pct=(n)=>d.visitors?((n/d.visitors*100).toFixed(1)+'%'):'—';
+  el.innerHTML=`<div class="repgrid">
+    ${card('Visitors',(d.visitors||0).toLocaleString(),(d.views||0).toLocaleString()+' page views')}
+    ${card('Engaged time',(d.engaged_avg??'—')+'s','average per visitor')}
+    ${card('Pages / visitor',(d.pages_avg??'—'),'depth of visit')}
+    ${card('Explored 5+ pages',(d.deep||0).toLocaleString(),pct(d.deep)+' of visitors')}
+    ${card('Bounced',(d.bounced||0).toLocaleString(),pct(d.bounced)+' saw one page')}
+    ${card('Identified',(d.identified||0).toLocaleString(),pct(d.identified)+' have a journey link')}
+  </div>`;
+  const list=(title,arr)=>{
+    if(!arr||!arr.length) return '';
+    const max=Math.max(...arr.map(a=>+a[1]))||1;
+    return `<div class="section-h" style="margin-top:2px"><h2 style="font-size:13px">${title}</h2></div>
+      <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px">`+arr.slice(0,8).map(a=>`
+      <div style="display:flex;align-items:center;gap:9px;font-size:12px">
+        <div style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(a[0])}">${esc(a[0]||'/')}</div>
+        <div style="width:120px;background:rgba(0,0,0,.06);border-radius:5px;height:9px">
+          <div style="width:${(+a[1]/max*100).toFixed(1)}%;height:100%;background:#46B189;border-radius:5px"></div></div>
+        <div class="mono" style="width:56px;text-align:right;color:var(--muted)">${(+a[1]).toLocaleString()}</div>
+      </div>`).join('')+'</div>';
+  };
+  el.innerHTML+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px">
+    <div>${list('Where they land',d.top_entry)}</div>
+    <div>${list('Where they leave',d.top_exit)}</div></div>`;
 }
 
 function renderVisitors(){
   const cur=windowRange();
   const tiles=document.getElementById('visTiles'), body=document.getElementById('visBody');
   paintSources(null); fetchSources(cur.from,cur.to).then(r=>{ if(curView==='visitors') paintSources(r||[]); });
+  paintVisitorReport(null); fetchVisReport(cur.from,cur.to).then(r=>{ if(curView==='visitors') paintVisitorReport(r); });
   const paintT=(rows)=>{
     if(!rows){ tiles.innerHTML=''; return; }
     const total=rows.length, withGa=rows.filter(r=>r[1]==='ga').length;
@@ -1255,6 +1475,7 @@ const fetchShopStats =(f,t)=>cachedRpc('shop_stats',     {p_from:iso(f),p_to:iso
 const fetchFunnel    =(f,t)=>cachedRpc('funnel_stats',   {p_from:iso(f),p_to:iso(t)},            'fun_'+f+'_'+t);
 const fetchVisitors  =(f,t)=>cachedRpc('recent_visitors',{p_from:iso(f),p_to:iso(t),p_limit:150},'vis_'+f+'_'+t);
 const fetchSources   =(f,t)=>cachedRpc('traffic_sources', {p_from:iso(f),p_to:iso(t)},            'src_'+f+'_'+t);
+const fetchVisReport =(f,t)=>cachedRpc('visitor_report',  {p_from:iso(f),p_to:iso(t)},            'vrp_'+f+'_'+t);
 async function refreshStats(from,to,k){
   try{
     const {data,error}=await sb.rpc('dash_stats',{p_from:new Date(from).toISOString(),p_to:new Date(to).toISOString()});
@@ -1923,11 +2144,24 @@ function paintMonitors(mons, daily){
       const shot=cached || (dev==='mobile'
         ? `https://image.thum.io/get/viewportWidth/400/width/160/${m.url}`
         : `https://image.thum.io/get/viewportWidth/1280/width/240/${m.url}`);
-      const remove=dev==='mobile'?` · <button class="raw-btn" onclick="delMonitor('${m.id}')">remove</button>`:'';
+      // Remove on EVERY row (it used to appear on the mobile row only, so a
+      // desktop-only entry could never be deleted). Shortened URL + a right-aligned
+      // action keeps the column readable instead of one long wrapping line.
+      const shortUrl=(m.url||'').replace(/^https?:\/\/(www\.)?/,'').replace(/\/$/,'');
       return `<tr>
         <td><div class="monrow">
           <div class="montile ${dev}"><img loading="lazy" src="${shot}" alt="" onerror="this.remove()"></div>
-          <div class="pg">${m.label} <span class="plat">${dev}</span><small>${m.url}${remove}</small></div>
+          <div class="pg" style="min-width:0">
+            <div style="display:flex;align-items:center;gap:7px">
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.label)}</span>
+              <span class="plat">${dev}</span>
+            </div>
+            <small style="display:flex;align-items:center;gap:8px">
+              <a href="${esc(m.url)}" target="_blank" rel="noopener" title="${esc(m.url)}"
+                 style="color:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(shortUrl)}</a>
+              <button class="raw-btn" onclick="delMonitor('${m.id}')" title="Remove this monitor">remove</button>
+            </small>
+          </div>
         </div></td>
         ${cells}
       </tr>`;
@@ -2040,7 +2274,7 @@ function saveConfig(){
 // PERF: paint the shell immediately, then boot once the deferred libraries land.
 // (supabase-js / Chart.js are `defer`, so they execute before DOMContentLoaded.)
 function boot(){
-  buildNav();buildAudienceCards();initRangeBar();initTrendControls();initCwvDevice();initLabStrategy();initSB();
+  initRail();buildNav();buildAudienceCards();initRangeBar();initTrendControls();initCwvDevice();initLabStrategy();initSB();
   loadAll().then(subscribe);
 }
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',boot);

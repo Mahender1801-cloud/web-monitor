@@ -248,8 +248,15 @@ async function psi(url, strategy) {
   api.searchParams.append('category', 'performance');
   if (PSI_KEY) api.searchParams.set('key', PSI_KEY);
   const r = await fetch(api, { signal: AbortSignal.timeout(60000) });
-  if (!r.ok) throw new Error(`PSI ${strategy} ${r.status}`);
+  if (!r.ok) throw new Error(`PSI ${strategy} ${r.status}${r.status === 429 ? ' (rate limited — set the PSI_KEY secret)' : ''}`);
   const j = await r.json();
+  // A 200 can still carry no audit: keyless quota exhaustion and Lighthouse
+  // runtime errors both come back this way, which silently wrote NULL scores.
+  if (j.error) throw new Error(`PSI ${strategy}: ${j.error.message}`);
+  if (j.lighthouseResult?.runtimeError)
+    throw new Error(`PSI ${strategy} runtime: ${j.lighthouseResult.runtimeError.code}`);
+  if (j.lighthouseResult?.categories?.performance?.score == null)
+    throw new Error(`PSI ${strategy}: no performance score returned (likely keyless quota — set PSI_KEY)`);
   const lab = j.lighthouseResult?.audits || {};
   const crux = j.loadingExperience?.metrics || {};
   const num = a => (lab[a]?.numericValue ?? null);
