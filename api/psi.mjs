@@ -31,7 +31,11 @@ export default async function handler(req, res) {
     const j = await r.json();
     // Pass Google's own error shape through so the client can tell quota apart
     // from a genuine audit failure, but never echo the key.
-    if (j.error) return res.status(200).json({ error: { message: j.error.message, code: j.error.code } });
+    // `keyed` tells us whether PSI_KEY was actually present on this deployment.
+    // A quota error with keyed:false means the Vercel env var is missing (we fell
+    // back to the tiny anonymous quota); keyed:true points at the Google project
+    // instead — usually the PageSpeed Insights API not enabled on THAT project.
+    if (j.error) return res.status(200).json({ error: { message: j.error.message, code: j.error.code }, keyed: !!key });
     if (!key) j._note = 'Running without a PSI key (rate limited). Set PSI_KEY in Vercel.';
     return res.status(200).json(j);
   } catch (e) {
