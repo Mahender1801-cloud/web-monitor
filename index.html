@@ -1424,16 +1424,15 @@ function cap(s){return s?s[0].toUpperCase()+s.slice(1):s;}
    of rum_events. With ~95k rows plus live beacon inserts that saturated the database
    (inserts hit 21s). dash_stats already returns by_device / by_os / by_net / by_ref
    for the selected window in ONE query, so those scans were pure waste. */
-// Client-side mirror of the server's traffic_channel() SQL function (used only
-// as a fallback: sample/demo mode, or the RPC not installed yet — live mode
-// gets this from dash_stats.by_ref / dash_pivot.ref instead). Keep in sync with
-// traffic_and_funnel_fix.sql if either changes.
+// Client-side mirror of the server's channel classification (dash_stats.by_ref /
+// dash_pivot.ref) — used only as a fallback: sample/demo mode, or the RPC not
+// installed yet. Keep in sync with traffic_perf_fix.sql if either changes.
 function channelOf(r){
   const src=(r.utm_source||'').toLowerCase(), med=(r.utm_medium||'').toLowerCase();
-  const paid=/(^cpc$|^ppc$|paid|^ads$)/.test(med);
+  const paid=/cpc|ppc|paid|ads|reel|stor|feed/.test(med);
   if(paid && /face|insta|meta|fb/.test(src)) return'Meta Ads';
   if(paid && src.includes('google')) return'Google Ads';
-  if(src.includes('insta')) return'Instagram';
+  if(src==='ig'||src.includes('insta')) return'Instagram';
   if(/face|meta|fb/.test(src)) return'Facebook / Meta';
   if(src.includes('whatsapp')) return'Shared link';
   if(src.includes('google')) return'Google';

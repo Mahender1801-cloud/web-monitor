@@ -3,6 +3,13 @@
 -- SQL Editor, AFTER webvitals.js has been re-pasted into Shopify (this file
 -- adds the columns the new collector fields need; old rows just have them null).
 --
+-- IMPORTANT: after running this file, also run traffic_perf_fix.sql — it
+-- replaces dash_stats/dash_pivot's by_ref classification (which this file
+-- installs as a per-row function call) with an inlined version. The function
+-- call turned out too slow at real data volume (dash_stats/dash_pivot timed
+-- out on anything past a ~24h window) and it also fixes a couple of
+-- classification gaps found against real campaign data. Run both, in order.
+--
 -- WHY
 -- 0) The Purchases tab's "Linked to browsing" headline TILE was reading
 --    buys.length — the count of rows in the `purchases` table, which is fed
