@@ -30,7 +30,10 @@ button{font-family:inherit;cursor:pointer}
 a{color:inherit}
 
 /* layout */
-.app{display:grid;grid-template-columns:240px 1fr;min-height:100vh;transition:grid-template-columns .22s cubic-bezier(.4,0,.2,1)}
+/* No transition on grid-template-columns: animating a grid track is unreliable
+   (Chrome can hold the old value, leaving the sidebar stuck at 240px). The
+   collapse is instant; the fade below carries the motion. */
+.app{display:grid;grid-template-columns:240px 1fr;min-height:100vh}
 /* Collapsed rail (desktop): the sidebar shrinks to the logo button, like Claude/ChatGPT */
 .app.railed{grid-template-columns:60px 1fr}
 .app.railed .side .navgrp,.app.railed .side .side-foot{opacity:0;pointer-events:none}
