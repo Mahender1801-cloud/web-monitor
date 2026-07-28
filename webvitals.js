@@ -19,6 +19,11 @@ const sessionId = (() => {
 // marketing attribution + device context (needs the extra columns from apply_all.sql)
 const qp = new URLSearchParams(location.search);
 const utm = k => qp.get('utm_' + k) || null;
+// Ad click-ids: present on the landing URL whenever a Meta/Google ad (or a link
+// routed through their redirectors) was clicked — a stronger paid-traffic signal
+// than UTM tags, which advertisers often forget to add. (needs traffic_and_funnel_fix.sql)
+const gclid = qp.get('gclid') || null;
+const fbclid = qp.get('fbclid') || null;
 const screenSize = (screen && screen.width) ? (screen.width + 'x' + screen.height) : null;
 const lang = navigator.language || null;
 
@@ -59,8 +64,10 @@ function timeOnPage() { return Math.round(engagedMs + (visStart !== null ? perfo
 function stampCart(force) {
   try {
     if (!force && sessionStorage.getItem('_rum_stamped')) return;
+    // keepalive: without it, a fast add-to-cart -> checkout flow can abort this
+    // request mid-flight on navigation, silently dropping the order's journey link.
     fetch('/cart/update.js', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ attributes: { _rum_sid: sessionId, _rum_gid: gaClientId || '' } })
     }).then(() => { try { sessionStorage.setItem('_rum_stamped', '1'); } catch {} }).catch(() => {});
   } catch {}
@@ -102,8 +109,19 @@ XMLHttpRequest.prototype.open = function (method, url) {
 addEventListener('submit', (e) => {
   try { const f = e.target; if (f && /\/cart\/add/.test(f.action || '')) { sendEvent('add_to_cart'); stampCart(true); } } catch {}
 }, { passive: true });
+// Checkout click: native Shopify checkout controls PLUS generic accelerated /
+// third-party buttons (Shop Pay, Shiprocket, etc. don't use Shopify's own markup,
+// so name/href/value selectors alone miss them — match on class/onclick too).
+const CHECKOUT_SEL = '[name="checkout"],[href*="/checkout"],button[value="Checkout"],'
+  + '[class*="checkout" i],[class*="buy-now" i],[onclick*="checkout" i],[onclick*="buyCart" i],'
+  + '.shopify-payment-button__button,[data-shopify="payment-button"]';
 addEventListener('click', (e) => {
-  try { if (e.target.closest('[name="checkout"],[href*="/checkout"],button[value="Checkout"]')) sendEvent('checkout_click'); } catch {}
+  try { if (e.target.closest(CHECKOUT_SEL)) { sendEvent('checkout_click'); stampCart(true); } } catch {}
+}, { passive: true });
+// Cart-viewed intent: on drawer-cart themes there is no /cart page navigation to
+// track, so use the cart icon click itself as the "reached cart" signal.
+addEventListener('click', (e) => {
+  try { if (e.target.closest('a[href="/cart"],[href^="/cart"]')) sendEvent('view_cart'); } catch {}
 }, { passive: true });
 
 function record(metric) {
@@ -144,6 +162,7 @@ function payload() {
     ttfb_waiting: m.TTFB?.waiting ?? null, ttfb_dns: m.TTFB?.dns ?? null,
     ttfb_connect: m.TTFB?.connect ?? null, ttfb_request: m.TTFB?.request ?? null,
     utm_source: utm('source'), utm_medium: utm('medium'), utm_campaign: utm('campaign'),
+    gclid, fbclid,
     screen: screenSize, lang,
     ga_client_id: gaClientId, ga_session_id: gaSessionId,
     time_on_page: timeOnPage(),

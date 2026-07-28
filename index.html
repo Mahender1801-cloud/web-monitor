@@ -469,9 +469,10 @@ a{color:inherit}
         </table></div>
         <p style="color:var(--faint);font-size:11.5px;margin-top:12px">
           The tiles above (<b>Orders / Revenue / AOV</b>) come from the <b>Shopify Admin API</b> — every order, 100% accurate.
-          The table below is the small subset whose shopper accepted cookies, so their <b>checkout_completed</b> pixel fired and carried a
-          GA4 client id — the only orders that can be joined to page-speed and shown as a page-by-page journey. Most orders never carry that id
-          (cookies declined / thank-you page closed early), which is why "Linked to browsing" is far below "Orders".
+          "Linked to browsing" means the order carries the shopper's browsing session id, stamped into their cart the moment they land on
+          the site and delivered back to us on the order (no cookies/pixel consent needed). It won't reach 100%: orders placed before this
+          stamping shipped can never be linked retroactively, and a checkout that bypasses the cart (accelerated one-click buttons, some
+          third-party checkout apps) can occasionally complete without carrying the stamp.
           <b>No names or emails are stored</b> — for customer identity use Shopify → Orders.
         </p>
       </section>
@@ -918,7 +919,10 @@ function renderPurchases(){
           ['Orders', s.orders.toLocaleString(), cur.label],
           ['Revenue', money(+s.revenue), cur.label],
           ['Avg order value', money(s.aov==null?null:+s.aov), `${s.orders.toLocaleString()} orders`],
-          ['Linked to browsing', `${buys.length.toLocaleString()} / ${s.orders.toLocaleString()}`, 'orders carrying page-speed data'],
+          // s.linked = accurate, window-wide count (shop_stats). Falls back to the
+          // pixel-based buys.length only if the DB hasn't been migrated yet (older
+          // shop_stats without a `linked` field).
+          ['Linked to browsing', `${(s.linked??buys.length).toLocaleString()} / ${s.orders.toLocaleString()}`, 'orders carrying a browsing-session id'],
         ];
     el.innerHTML=rows.map(([h,v,sub])=>`<div class="card"><h3>${h}</h3><div class="metric" style="color:var(--ink)">${v}</div><div class="metric-sub">${sub}</div></div>`).join('');
   };
@@ -1413,24 +1417,51 @@ function applyCustomRange(){
 /* ---- Audience & network: accurate counts across ALL sessions (not just 400) ---- */
 const OSPAL=['#4F46E5','#7C74F0','#A5A0F5','#C7C9F5','#E0E1FB','#ECECFB'];
 const NETPAL=['#129C6E','#4CB98D','#86D0B0','#BFE7D3','#E6F6EF'];
-const REFPAL=['#4F46E5','#E0961A','#E23D4B','#129C6E','#8B84F5','#C7C9F5'];
+const REFPAL=['#4F46E5','#E0961A','#E23D4B','#129C6E','#8B84F5','#C7C9F5','#0EA5E9','#D946A6','#7A8296'];
 const DEVPAL=['#4F46E5','#C7C9F5'];
 function cap(s){return s?s[0].toUpperCase()+s.slice(1):s;}
 /* REMOVED: loadAudience() used to fire ~20 `count=exact` queries, each a full scan
    of rum_events. With ~95k rows plus live beacon inserts that saturated the database
    (inserts hit 21s). dash_stats already returns by_device / by_os / by_net / by_ref
    for the selected window in ONE query, so those scans were pure waste. */
+// Client-side mirror of the server's traffic_channel() SQL function (used only
+// as a fallback: sample/demo mode, or the RPC not installed yet — live mode
+// gets this from dash_stats.by_ref / dash_pivot.ref instead). Keep in sync with
+// traffic_and_funnel_fix.sql if either changes.
+function channelOf(r){
+  const src=(r.utm_source||'').toLowerCase(), med=(r.utm_medium||'').toLowerCase();
+  const paid=/(^cpc$|^ppc$|paid|^ads$)/.test(med);
+  if(paid && /face|insta|meta|fb/.test(src)) return'Meta Ads';
+  if(paid && src.includes('google')) return'Google Ads';
+  if(src.includes('insta')) return'Instagram';
+  if(/face|meta|fb/.test(src)) return'Facebook / Meta';
+  if(src.includes('whatsapp')) return'Shared link';
+  if(src.includes('google')) return'Google';
+  if(src.includes('youtube')) return'YouTube';
+  if(src) return'Campaign: '+r.utm_source;
+  if(r.gclid) return'Google Ads';
+  const x=(r.referrer||'').toLowerCase();
+  if(r.fbclid) return x.includes('instagram')?'Instagram':'Facebook / Meta';
+  if(!x) return'Direct';
+  if(x.includes('instagram')) return'Instagram';
+  if(x.includes('facebook')||x.includes('fb.com')||x.includes('fb.me')) return'Facebook / Meta';
+  if(x.includes('whatsapp')||x.includes('wa.me')||x.includes('t.co')||x.includes('bit.ly')||x.includes('lnk.')||x.includes('linktr')) return'Shared link';
+  if(x.includes('google')) return'Google';
+  if(x.includes('youtube')) return'YouTube';
+  if(x.includes('bing')||x.includes('yahoo')||x.includes('duckduckgo')) return'Other search';
+  if(x.includes('hashtageyewear')) return'Internal';
+  return'Other referral';
+}
 function audienceFromRows(rows){
   const g=f=>{const m={};rows.forEach(r=>{const k=f(r)||'Other';m[k]=(m[k]||0)+1});return Object.entries(m).sort((a,b)=>b[1]-a[1]);};
-  const refCat=r=>{const x=(r.referrer||'').toLowerCase();if(!x)return'Direct';if(x.includes('instagram'))return'Instagram';if(x.includes('facebook'))return'Facebook';if(x.includes('google'))return'Google';if(x.includes('hashtageyewear'))return'Internal';return'Other';};
-  return {total:rows.length,device:g(r=>cap(r.device)),os:g(r=>r.os),net:g(r=>r.connection),ref:g(refCat)};
+  return {total:rows.length,device:g(r=>cap(r.device)),os:g(r=>r.os),net:g(r=>r.connection),ref:g(channelOf)};
 }
 /* ---- 3D pie (perspective-tilted) + custom HTML legend ---- */
 const AUD_DIMS=[
   {k:'device',title:'Device',        canvas:'deviceChart', pal:()=>DEVPAL},
   {k:'os',    title:'Operating system',canvas:'osChart',   pal:()=>OSPAL},
   {k:'net',   title:'Network',       canvas:'netChart',    pal:()=>NETPAL},
-  {k:'ref',   title:'Referrer source',canvas:'refChart',   pal:()=>REFPAL},
+  {k:'ref',   title:'Traffic source', canvas:'refChart',   pal:()=>REFPAL},
 ];
 function buildAudienceCards(){
   const el=document.getElementById('audienceGrid'); if(!el)return;
@@ -1611,8 +1642,7 @@ function dimValue(r,dim){
   if(dim==='device')return cap(r.device)||'Other';
   if(dim==='os')return r.os||'Other';
   if(dim==='net')return r.connection||'unknown';
-  const x=(r.referrer||'').toLowerCase();
-  if(!x)return'Direct';if(x.includes('instagram'))return'Instagram';if(x.includes('facebook'))return'Facebook';if(x.includes('google'))return'Google';if(x.includes('hashtageyewear'))return'Internal';return'Other';
+  return channelOf(r);
 }
 // Pivot table: dimension rows x page-group columns. Data comes from dash_pivot
 // (server-aggregated over the WHOLE window) — the browser only ever holds a slice.
