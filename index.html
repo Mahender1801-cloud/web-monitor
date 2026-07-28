@@ -1072,6 +1072,12 @@ function rescore(u){ document.getElementById('wsUrl').value=u; document.getEleme
 
 /* ===================== PURCHASES ================== */
 const money=v=>(v==null?'—':'₹'+Math.round(v).toLocaleString('en-IN'));
+// Why an order is linked — shown on hover so an inferred match is never mistaken
+// for a certain one.
+const LINK_WHY={stamp:'Exact: the cart carried this shopper’s session id',
+  checkout:'Strong: this session clicked checkout just before the order',
+  cart:'Good: this session opened the cart just before the order',
+  atc:'Weaker: this session added to cart shortly before the order'};
 function renderPurchases(){
   const cur=windowRange();
   const buys=(DATA.purchases||[]).filter(p=>{const t=+new Date(p.created_at);return t>=cur.from&&t<=cur.to;});
@@ -1143,8 +1149,8 @@ function renderPurchases(){
       : gid
       ? `<button class="raw-btn" onclick="showJourney('${gid}','${o.order_number||''}','ga_client_id')">view journey →</button>`
       : inf
-      ? `<button class="raw-btn" title="Matched to the session that clicked checkout just before this order" onclick="showJourney('${inf}','${o.order_number||''}','session_id')">view journey <span style="opacity:.6">≈</span></button>`
-      : '<span style="color:var(--faint)">not linked</span>';
+      ? `<button class="raw-btn" title="${LINK_WHY[o.link_source]||'Inferred from this shopper’s checkout intent'}" onclick="showJourney('${inf}','${o.order_number||''}','session_id')">view journey <span style="opacity:.6">≈</span></button>`
+      : '<span style="color:var(--faint)" title="No checkout, cart or add-to-cart beacon was captured for this order — usually an accelerated Buy-now checkout">not linked</span>';
     return `<tr>
       <td class="mono" style="color:var(--faint)">${new Date(o.created_at).toLocaleString()}</td>
       <td class="mono">${o.order_number||'—'}</td>
@@ -1485,6 +1491,9 @@ async function ensureData(view){
     jobs.push(sb.from('psi_results').select('*').order('created_at',{ascending:false}).limit(100)
       .then(r=>{DATA.psi=r.data||[]; loaded.psi=1;}));
   if(view==='purchases' && !loaded.buys){
+    // Catch anything the webhook missed (e.g. the checkout beacon landed after the
+    // order). Cheap: 3-day window, indexed. Failure is silent — orders still show.
+    jobs.push(sb.rpc('link_recent_orders').then(()=>{}).catch(()=>{}));
     jobs.push(sb.from('purchases').select('*').order('created_at',{ascending:false}).limit(200)
       .then(r=>{DATA.purchases=r.data||[]; loaded.buys=1;}));
     // the real order feed (Shopify) — recent orders for the table + journey links

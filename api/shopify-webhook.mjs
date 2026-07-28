@@ -52,7 +52,20 @@ export default async function handler(req, res) {
       body: JSON.stringify(rows)
     });
     if (!r.ok) return res.status(502).json({ error: 'supabase ' + r.status, detail: (await r.text()).slice(0, 300) });
-    return res.status(200).json({ ok: true, upserted: rows.length });
+
+    // Link the order to its browsing journey immediately. Waiting for the 5x/day
+    // scheduled job left fresh orders showing "not linked" for hours.
+    let linked = null;
+    try {
+      const lr = await fetch(`${SUPABASE_URL}/rest/v1/rpc/link_recent_orders`, {
+        method: 'POST',
+        headers: { apikey: SERVICE_KEY, Authorization: 'Bearer ' + SERVICE_KEY, 'Content-Type': 'application/json' },
+        body: '{}'
+      });
+      if (lr.ok) linked = (await lr.text()).trim();
+    } catch { /* linking is best-effort; the order itself is already saved */ }
+
+    return res.status(200).json({ ok: true, upserted: rows.length, linked });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
