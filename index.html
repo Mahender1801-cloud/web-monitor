@@ -1409,22 +1409,40 @@ function renderVisitors(){
 function paintFunnel(f){
   const el=document.getElementById('funnelBox'); if(!el) return;
   if(!f){ el.innerHTML='<div class="empty" style="padding:10px">Loading funnel…</div>'; return; }
-  const steps=[['Sessions',f.sessions],['Viewed product',f.viewed_product],['Added to cart',f.added_to_cart],['Reached cart',f.viewed_cart],['Clicked checkout',f.checkout_click],['Purchased',f.purchased]];
-  if(!steps.some(s=>s[1])){ el.innerHTML='<div class="empty" style="padding:14px">Funnel starts collecting once the updated collector is live — run <b>funnel_and_link.sql</b> and re-paste <b>webvitals.js</b>.</div>'; return; }
+  const steps=[
+    ['Sessions',        f.sessions,       f.views?`${(+f.views).toLocaleString()} page views`:''],
+    ['Viewed product',  f.viewed_product, ''],
+    ['Added to cart',   f.added_to_cart,  ''],
+    ['Reached cart',    f.viewed_cart,    ''],
+    ['Clicked checkout',f.checkout_click, ''],
+    ['Purchased',       f.purchased,      'orders placed']
+  ];
+  if(!steps.some(s2=>s2[1])){ el.innerHTML='<div class="empty" style="padding:14px">Funnel starts collecting once the updated collector is live — run <b>funnel_and_link.sql</b> and re-paste <b>webvitals.js</b>.</div>'; return; }
   const base=f.sessions||1;
-  el.innerHTML='<div style="display:flex;flex-direction:column;gap:7px">'+steps.map(([label,n],i)=>{
+  el.innerHTML='<div style="display:flex;flex-direction:column;gap:7px">'+steps.map(([label,n,sub],i)=>{
     n=n||0; const pct=n/base*100;
-    const drop = i>0 && steps[i-1][1] ? Math.round((1-n/steps[i-1][1])*100) : null;
+    const prev=i>0?(steps[i-1][1]||0):0;
+    // Steps are measured from independent signals (page paths vs beacons vs orders),
+    // so a later step can exceed an earlier one — e.g. drawer checkouts that never
+    // hit /cart. Showing that as a negative "drop" read as broken, so label it.
+    let note='';
+    if(i>0 && prev){
+      const keep=n/prev*100;
+      note = keep>105
+        ? `<span title="Measured from a different signal than the step above, so it can exceed it">≈</span>`
+        : `${Math.round(100-keep)}% drop`;
+    }
     return `<div style="display:flex;align-items:center;gap:10px">
-      <div style="width:120px;font-size:12.5px;color:var(--muted);text-align:right">${label}</div>
+      <div style="width:132px;font-size:12.5px;color:var(--muted);text-align:right">${label}</div>
       <div style="flex:1;background:rgba(0,0,0,.06);border-radius:6px;height:24px">
-        <div style="width:${Math.max(1.5,pct)}%;height:100%;background:var(--ink,#222);border-radius:6px"></div>
+        <div style="width:${Math.max(1.5,Math.min(100,pct))}%;height:100%;background:var(--ink,#222);border-radius:6px"></div>
       </div>
-      <div style="width:120px;font-size:12px" class="mono">${n.toLocaleString()} · ${pct.toFixed(1)}%</div>
-      <div style="width:70px;font-size:11px;color:var(--faint)">${drop!=null?('−'+drop+'%'):''}</div>
+      <div style="width:150px;font-size:12px" class="mono">${n.toLocaleString()} · ${pct.toFixed(1)}%${sub?`<span style="color:var(--faint)"> · ${sub}</span>`:''}</div>
+      <div style="width:78px;font-size:11px;color:var(--faint)">${note}</div>
     </div>`;
   }).join('')+'</div>';
 }
+
 
 // key = the id value; field = 'session_id' (cart-stamp link, preferred) or 'ga_client_id' (pixel)
 async function showJourney(key, txn, field){
