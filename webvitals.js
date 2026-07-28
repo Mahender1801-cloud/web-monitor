@@ -105,24 +105,53 @@ XMLHttpRequest.prototype.open = function (method, url) {
   try { if (/\/cart\/add(\.js)?/.test(String(url))) this.addEventListener('load', () => { sendEvent('add_to_cart'); stampCart(true); }); } catch {}
   return _open.apply(this, arguments);
 };
-// Non-AJAX add-to-cart forms + checkout intent (click on a checkout control).
+// Non-AJAX add-to-cart forms + the cart form's checkout submit.
+// CAPTURE phase everywhere below: drawer-cart themes routinely call
+// stopPropagation() on their own buttons, so a bubble-phase listener on window
+// never sees the click. That is why checkout_click stayed at 0 while orders were
+// clearly being placed. Capture runs before any handler can stop the event.
 addEventListener('submit', (e) => {
-  try { const f = e.target; if (f && /\/cart\/add/.test(f.action || '')) { sendEvent('add_to_cart'); stampCart(true); } } catch {}
-}, { passive: true });
-// Checkout click: native Shopify checkout controls PLUS generic accelerated /
-// third-party buttons (Shop Pay, Shiprocket, etc. don't use Shopify's own markup,
-// so name/href/value selectors alone miss them — match on class/onclick too).
+  try {
+    const f = e.target; if (!f) return;
+    const action = f.action || '';
+    if (/\/cart\/add/.test(action)) { sendEvent('add_to_cart'); stampCart(true); return; }
+    // Shopify's cart form posts to /cart with a <button name="checkout"> submitter
+    const sub = e.submitter;
+    if (/\/cart(\?|$|\/)/.test(action) &&
+        ((sub && (sub.name === 'checkout' || /checkout/i.test(sub.value || ''))) || f.querySelector('[name="checkout"]'))) {
+      sendEvent('checkout_click'); stampCart(true);
+    }
+  } catch {}
+}, { capture: true, passive: true });
+
+// Checkout click: native Shopify checkout controls PLUS accelerated / third-party
+// buttons (Shop Pay, Shiprocket, etc. don't use Shopify's own markup, so
+// name/href/value selectors alone miss them — match on class/onclick too).
 const CHECKOUT_SEL = '[name="checkout"],[href*="/checkout"],button[value="Checkout"],'
   + '[class*="checkout" i],[class*="buy-now" i],[onclick*="checkout" i],[onclick*="buyCart" i],'
   + '.shopify-payment-button__button,[data-shopify="payment-button"]';
+function isCheckoutTarget(t) {
+  try {
+    if (!t) return false;
+    if (t.closest && t.closest(CHECKOUT_SEL)) return true;
+    // last resort: a button whose visible label reads like a checkout action
+    const el = t.closest && t.closest('button,a,input');
+    return !!el && /check\s*out|buy it now|buy now|place order/i.test((el.textContent || el.value || '').trim());
+  } catch { return false; }
+}
 addEventListener('click', (e) => {
-  try { if (e.target.closest(CHECKOUT_SEL)) { sendEvent('checkout_click'); stampCart(true); } } catch {}
-}, { passive: true });
+  try { if (isCheckoutTarget(e.target)) { sendEvent('checkout_click'); stampCart(true); } } catch {}
+}, { capture: true, passive: true });
+
 // Cart-viewed intent: on drawer-cart themes there is no /cart page navigation to
-// track, so use the cart icon click itself as the "reached cart" signal.
+// track, so treat opening the cart (icon/drawer toggle) as "reached cart".
 addEventListener('click', (e) => {
-  try { if (e.target.closest('a[href="/cart"],[href^="/cart"]')) sendEvent('view_cart'); } catch {}
-}, { passive: true });
+  try {
+    const t = e.target;
+    if (t.closest && t.closest('a[href="/cart"],[href^="/cart"],[class*="cart-icon" i],[class*="cart-toggle" i],[data-cart-drawer],[aria-controls*="cart" i]'))
+      sendEvent('view_cart');
+  } catch {}
+}, { capture: true, passive: true });
 
 function record(metric) {
   const a = metric.attribution || {};

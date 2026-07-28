@@ -40,6 +40,45 @@ drop policy if exists sel_rum_daily on public.rum_daily;
 create policy sel_rum_daily on public.rum_daily for select using (true);
 
 -- ---------------------------------------------------------------------------
+-- 1b) Traffic channel classifier (kept in sync with traffic_perf_fix.sql).
+--     Included here so THIS file is the single source of truth for dash_stats /
+--     dash_pivot — both files define them, so whichever runs last wins. Run this
+--     one last and you get the fast rollup AND the full Meta Ads / Campaign detail.
+-- ---------------------------------------------------------------------------
+create or replace function public.traffic_channel(
+  p_referrer text, p_utm_source text, p_utm_medium text, p_gclid text, p_fbclid text
+) returns text language sql immutable parallel safe as $$
+  select case
+    when (p_utm_medium ~* 'cpc|ppc|paid|ads|reel|stor|feed')
+         and p_utm_source ilike any (array['%face%','%insta%','%meta%','%fb%'])   then 'Meta Ads'
+    when (p_utm_medium ~* 'cpc|ppc|paid|ads')
+         and p_utm_source ilike '%google%'                                       then 'Google Ads'
+    when p_utm_source ilike 'ig' or p_utm_source ilike '%insta%'                  then 'Instagram'
+    when p_utm_source ilike any (array['%face%','%meta%','%fb%'])                 then 'Facebook / Meta'
+    when p_utm_source ilike '%whatsapp%'                                          then 'Shared link'
+    when p_utm_source ilike '%google%'                                            then 'Google'
+    when p_utm_source ilike '%youtube%'                                           then 'YouTube'
+    when p_utm_source is not null and p_utm_source <> ''                          then 'Campaign: ' || p_utm_source
+    when p_gclid is not null and p_gclid <> ''                                    then 'Google Ads'
+    when p_fbclid is not null and p_fbclid <> '' and p_referrer ilike '%instagram%' then 'Instagram'
+    when p_fbclid is not null and p_fbclid <> ''                                  then 'Facebook / Meta'
+    when p_referrer is null or p_referrer = ''                                    then 'Direct'
+    when p_referrer ilike '%instagram%' or p_referrer ilike '%l.instagram%'       then 'Instagram'
+    when p_referrer ilike '%facebook%'  or p_referrer ilike '%l.facebook%'
+      or p_referrer ilike '%fb.com%'    or p_referrer ilike '%fb.me%'             then 'Facebook / Meta'
+    when p_referrer ilike '%whatsapp%'  or p_referrer ilike '%wa.me%'
+      or p_referrer ilike '%t.co%'      or p_referrer ilike '%bit.ly%'
+      or p_referrer ilike '%lnk.%'      or p_referrer ilike '%linktr%'            then 'Shared link'
+    when p_referrer ilike '%google%'                                              then 'Google'
+    when p_referrer ilike '%youtube%'                                             then 'YouTube'
+    when p_referrer ilike '%bing%' or p_referrer ilike '%yahoo%'
+      or p_referrer ilike '%duckduckgo%'                                          then 'Other search'
+    when p_referrer ilike '%hashtageyewear%'                                      then 'Internal'
+    else 'Other referral'
+  end
+$$;
+
+-- ---------------------------------------------------------------------------
 -- 2) Histogram helpers.  A histogram is jsonb {bucket_index: count}; the same
 --    merge works for the dimension maps ({'mobile': 812, …}) since both are
 --    key -> count.
@@ -87,7 +126,8 @@ as $$
 begin
   with src as materialized (
     select lcp, inp, cls, fcp, ttfb, time_on_page, device, os, connection,
-           referrer, path, ga_client_id, session_id
+           referrer, path, ga_client_id, session_id,
+           utm_source, utm_medium, gclid, fbclid
     from public.rum_events
     where created_at >= p_day::timestamptz
       and created_at <  (p_day + 1)::timestamptz
@@ -117,13 +157,7 @@ begin
   nt as (select jsonb_object_agg(k, c) j from (
            select coalesce(nullif(connection,''),'unknown') k, count(*) c from src group by 1) t),
   rf as (select jsonb_object_agg(k, c) j from (
-           select case
-             when referrer is null or referrer = '' then 'Direct'
-             when referrer ilike '%instagram%'      then 'Instagram'
-             when referrer ilike '%facebook%'       then 'Facebook'
-             when referrer ilike '%google%'         then 'Google'
-             when referrer ilike '%hashtageyewear%' then 'Internal'
-             else 'Other' end k, count(*) c from src group by 1) t),
+           select public.traffic_channel(referrer, utm_source, utm_medium, gclid, fbclid) k, count(*) c from src group by 1) t),
   pth as (select coalesce(jsonb_agg(jsonb_build_array(path, n, l, i, c2)), '[]'::jsonb) j from (
            select path, count(*) n,
                   percentile_cont(0.75) within group (order by lcp) l,
@@ -147,13 +181,7 @@ begin
                     coalesce(nullif(initcap(device),''),'Other') dev,
                     coalesce(nullif(os,''),'Other') os2,
                     coalesce(nullif(connection,''),'unknown') net,
-                    case
-                      when referrer is null or referrer = ''  then 'Direct'
-                      when referrer ilike '%instagram%'       then 'Instagram'
-                      when referrer ilike '%facebook%'        then 'Facebook'
-                      when referrer ilike '%google%'          then 'Google'
-                      when referrer ilike '%hashtageyewear%'  then 'Internal'
-                      else 'Other' end ref
+                    public.traffic_channel(referrer, utm_source, utm_medium, gclid, fbclid) ref
              from src
            ) s,
            lateral (values ('device', s.dev), ('os', s.os2), ('net', s.net), ('ref', s.ref)) v(dim, val)
@@ -212,7 +240,7 @@ begin
   -- the partial head/tail that the rollup doesn't cover
   live as materialized (
     select lcp, inp, cls, fcp, ttfb, time_on_page, device, os, connection,
-           referrer, path, ga_client_id
+           referrer, path, ga_client_id, utm_source, utm_medium, gclid, fbclid
     from public.rum_events
     where (created_at >= p_from and created_at < full_lo::timestamptz)
        or (created_at >= full_hi::timestamptz and created_at <= p_to)
@@ -239,13 +267,7 @@ begin
   lnt as (select coalesce(jsonb_object_agg(k,c),'{}'::jsonb) j from (
             select coalesce(nullif(connection,''),'unknown') k, count(*) c from live group by 1) t),
   lrf as (select coalesce(jsonb_object_agg(k,c),'{}'::jsonb) j from (
-            select case
-              when referrer is null or referrer = '' then 'Direct'
-              when referrer ilike '%instagram%'      then 'Instagram'
-              when referrer ilike '%facebook%'       then 'Facebook'
-              when referrer ilike '%google%'         then 'Google'
-              when referrer ilike '%hashtageyewear%' then 'Internal'
-              else 'Other' end k, count(*) c from live group by 1) t),
+            select public.traffic_channel(referrer, utm_source, utm_medium, gclid, fbclid) k, count(*) c from live group by 1) t),
   lpt as (select coalesce(jsonb_agg(jsonb_build_array(path,n,l,i,c2)),'[]'::jsonb) j from (
             select path, count(*) n,
                    percentile_cont(0.75) within group (order by lcp) l,
@@ -331,7 +353,8 @@ begin
 
   with roll as (select by_pivot j from public.rum_daily where d >= full_lo and d < full_hi),
   live as materialized (
-    select device, os, connection, referrer, path from public.rum_events
+    select device, os, connection, referrer, path,
+           utm_source, utm_medium, gclid, fbclid from public.rum_events
     where (created_at >= p_from and created_at < full_lo::timestamptz)
        or (created_at >= full_hi::timestamptz and created_at <= p_to)
   ),
@@ -349,13 +372,7 @@ begin
                      coalesce(nullif(initcap(device),''),'Other') dev,
                      coalesce(nullif(os,''),'Other') os2,
                      coalesce(nullif(connection,''),'unknown') net,
-                     case
-                       when referrer is null or referrer = ''  then 'Direct'
-                       when referrer ilike '%instagram%'       then 'Instagram'
-                       when referrer ilike '%facebook%'        then 'Facebook'
-                       when referrer ilike '%google%'          then 'Google'
-                       when referrer ilike '%hashtageyewear%'  then 'Internal'
-                       else 'Other' end ref
+                     public.traffic_channel(referrer, utm_source, utm_medium, gclid, fbclid) ref
               from live
             ) s,
             lateral (values ('device', s.dev), ('os', s.os2), ('net', s.net), ('ref', s.ref)) v(dim, val)
