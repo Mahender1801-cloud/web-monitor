@@ -501,6 +501,17 @@ async function runAuto(key, monitor, homepage) {
   // 0b) Shopify: the complete, reliable order feed -> shop_orders
   await pullShopify();
 
+  // 0b2) Link orders to browsing journeys. The cart stamp rarely survives this
+  //      store's checkout, so fall back to the session that clicked checkout just
+  //      before the order (marked as inferred in the DB).
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/link_orders_by_intent`, {
+      method: 'POST', headers: H,
+      body: JSON.stringify({ p_from: new Date(Date.now() - 3 * 864e5).toISOString(), p_to: new Date().toISOString() })
+    });
+    console.log(r.ok ? `Order linking: ${await r.text()} newly linked.` : `Order linking: ${r.status} ${(await r.text()).slice(0,120)}`);
+  } catch (e) { console.error('Order linking failed:', e.message); }
+
   // 0c) Refresh the daily RUM rollup (today + yesterday). The dashboard reads
   //     these pre-aggregated rows instead of scanning ~250k raw events, which is
   //     what keeps Summary/pivots fast as the table grows.

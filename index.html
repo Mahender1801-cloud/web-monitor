@@ -36,7 +36,13 @@ a{color:inherit}
 .app{display:grid;grid-template-columns:240px 1fr;min-height:100vh}
 /* Collapsed rail (desktop): the sidebar shrinks to the logo button, like Claude/ChatGPT */
 .app.railed{grid-template-columns:60px 1fr}
-.app.railed .side .navgrp,.app.railed .side .side-foot{opacity:0;pointer-events:none}
+.app.railed .side .side-foot{opacity:0;pointer-events:none}
+.app.railed .navgrp h4{display:none}
+.app.railed .nav{justify-content:center;padding:9px 0;gap:0;position:relative}
+.app.railed .nav .lbl{display:none}
+.app.railed .nav .ic{width:auto;font-size:16px;opacity:1}
+.app.railed .nav .dot{position:absolute;top:5px;right:9px;margin:0}
+.app.railed .navgrp{padding:8px 6px}
 .app.railed .brandtext{display:none}
 .app.railed .brandbtn{justify-content:center;padding:16px 0 12px}
 .side .navgrp,.side .side-foot{transition:opacity .15s}
@@ -741,7 +747,8 @@ function buildNav(){
   el.innerHTML=h;
 }
 function navBtn(id,label,ic,isCat){
-  return `<button class="nav" data-nav="${id}" onclick="go('${id}')"><span class="ic">${ic}</span>${label}<span class="dot" data-dot="${id}"></span></button>`;
+  // label wrapped so the collapsed rail can hide the text but keep the icon
+  return `<button class="nav" data-nav="${id}" onclick="go('${id}')" title="${label}"><span class="ic">${ic}</span><span class="lbl">${label}</span><span class="dot" data-dot="${id}"></span></button>`;
 }
 function go(id){
   document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('on', n.dataset.nav===id));
@@ -762,9 +769,18 @@ function applyRail(on){
   const app=document.querySelector('.app'); if(!app) return;
   app.classList.toggle('railed',on);
   app.style.gridTemplateColumns = on ? '60px 1fr' : '240px 1fr';
-  document.querySelectorAll('.side .navgrp,.side .side-foot').forEach(el=>{
+  // Keep the nav usable in rail mode: icons stay, labels hide (see .app.railed CSS).
+  document.querySelectorAll('.side .side-foot').forEach(el=>{
     el.style.opacity = on ? '0' : '1';
     el.style.pointerEvents = on ? 'none' : '';
+  });
+  document.querySelectorAll('.side .navgrp').forEach(el=>{ el.style.opacity='1'; el.style.pointerEvents=''; });
+  document.querySelectorAll('.side .nav .lbl').forEach(el=>{ el.style.display = on ? 'none' : ''; });
+  document.querySelectorAll('.side .navgrp h4').forEach(el=>{ el.style.display = on ? 'none' : ''; });
+  document.querySelectorAll('.side .nav').forEach(el=>{
+    el.style.justifyContent = on ? 'center' : '';
+    el.style.padding = on ? '9px 0' : '';
+    el.style.gap = on ? '0' : '';
   });
   const bt=document.querySelector('.brandtext'); if(bt) bt.style.display = on ? 'none' : '';
   const bb=document.querySelector('.brandbtn'); if(bb) bb.style.justifyContent = on ? 'center' : '';
@@ -1052,7 +1068,8 @@ function renderPurchases(){
           // s.linked = accurate, window-wide count (shop_stats). Falls back to the
           // pixel-based buys.length only if the DB hasn't been migrated yet (older
           // shop_stats without a `linked` field).
-          ['Linked to browsing', `${(s.linked??buys.length).toLocaleString()} / ${s.orders.toLocaleString()}`, 'orders carrying a browsing-session id'],
+          ['Linked to browsing', `${(s.linked??buys.length).toLocaleString()} / ${s.orders.toLocaleString()}`,
+            (s.linked_inferred? `${s.linked_exact||0} exact + ${s.linked_inferred} inferred from checkout click` : 'orders carrying a browsing-session id')],
         ];
     el.innerHTML=rows.map(([h,v,sub])=>`<div class="card"><h3>${h}</h3><div class="metric" style="color:var(--ink)">${v}</div><div class="metric-sub">${sub}</div></div>`).join('');
   };
@@ -1073,11 +1090,15 @@ function renderPurchases(){
   }
   const stCls=s=>/paid/.test(s)?'good':/pending|partial/.test(s)?'warn':/void|refund|expired/.test(s)?'poor':'na';
   body.innerHTML=ords.slice(0,60).map(o=>{
-    const sid=o.rum_session, gid=o.ga_client_id;
+    // Exact cart stamp first; otherwise the session inferred from the shopper's
+    // checkout click (marked ≈ so an inferred match is never passed off as certain).
+    const sid=o.rum_session, gid=o.ga_client_id, inf=o.inferred_session;
     const journey = sid
       ? `<button class="raw-btn" onclick="showJourney('${sid}','${o.order_number||''}','session_id')">view journey →</button>`
       : gid
       ? `<button class="raw-btn" onclick="showJourney('${gid}','${o.order_number||''}','ga_client_id')">view journey →</button>`
+      : inf
+      ? `<button class="raw-btn" title="Matched to the session that clicked checkout just before this order" onclick="showJourney('${inf}','${o.order_number||''}','session_id')">view journey <span style="opacity:.6">≈</span></button>`
       : '<span style="color:var(--faint)">not linked</span>';
     return `<tr>
       <td class="mono" style="color:var(--faint)">${new Date(o.created_at).toLocaleString()}</td>
@@ -1088,8 +1109,12 @@ function renderPurchases(){
       <td style="font-size:12px">${journey}</td>
     </tr>`;
   }).join('');
-  const linked=ords.filter(o=>o.rum_session||o.ga_client_id).length;
-  document.getElementById('buyNote').textContent=`${ords.length} recent order${ords.length>1?'s':''} · ${linked} linked to a browsing journey`;
+  const linked=ords.filter(o=>o.rum_session||o.ga_client_id||o.inferred_session).length;
+  const rets=ords.filter(o=>/^R-/i.test(o.order_number||'')).length;
+  const exch=ords.filter(o=>/^E-/i.test(o.order_number||'')).length;
+  // Spell the arithmetic out so this line always reconciles with the Orders tile.
+  document.getElementById('buyNote').textContent =
+    `${ords.length} rows = ${ords.length-rets-exch} orders + ${rets} return${rets===1?'':'s'} + ${exch} exchange${exch===1?'':'s'} · ${linked} linked to a journey`;
 }
 
 // Full page-by-page journey for one buyer, fetched fresh by GA client id (indexed,
@@ -1349,7 +1374,7 @@ async function ensureData(view){
     jobs.push(sb.from('purchases').select('*').order('created_at',{ascending:false}).limit(200)
       .then(r=>{DATA.purchases=r.data||[]; loaded.buys=1;}));
     // the real order feed (Shopify) — recent orders for the table + journey links
-    jobs.push(sb.from('shop_orders').select('id,order_number,created_at,total_price,currency,items,financial_status,rum_session,ga_client_id')
+    jobs.push(sb.from('shop_orders').select('id,order_number,created_at,total_price,currency,items,financial_status,rum_session,ga_client_id,inferred_session,link_source')
       .order('created_at',{ascending:false}).limit(80)
       .then(r=>{DATA.shopOrders=r.data||[];}).catch(()=>{}));
   }
