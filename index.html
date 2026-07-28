@@ -888,17 +888,17 @@ async function runLighthouse(){
   rep.innerHTML='<div class="card"><div class="empty">Running a real Lighthouse audit on Google’s servers — this takes 15–40 seconds…</div></div>';
   try{
     // Server-side proxy: the PSI key lives in a Vercel env var, never in the page.
-    const r=await fetch('/api/psi?strategy='+encodeURIComponent(labStrategy)+'&url='+encodeURIComponent(url));
+    const r=await fetch('/api/psi?strategy='+encodeURIComponent(labStrategy)+'&url='+encodeURIComponent(url),
+                        {signal:AbortSignal.timeout(150000)});
     const j=await r.json();
     if(j.error){
       const q=j.error.code===429||/quota|rate/i.test(j.error.message||'');
-      // The keyless PSI quota is tiny and shared, so a live run often 429s. The
-      // GitHub Action already audits every monitored page 5x/day and stores the
-      // result — fall back to that instead of showing the user a dead end.
-      if(q && await showStoredPSI(rep, url)) return;
+      // Any failure (quota, Lighthouse runtime error, timeout) falls back to the
+      // newest stored audit from the scheduled job rather than a dead end.
+      if(await showStoredPSI(rep, url)) return;
       rep.innerHTML=`<div class="card"><div class="empty">${q
         ?'PageSpeed rate limit hit (keyless quota), and no stored audit exists for this URL yet.<br><span style="font-size:11px">Add a free PSI API key above for on-demand runs, or add this page under <b>Monitors</b> — the scheduled job audits it 5×/day.</span>'
-        :'Lighthouse failed: '+j.error.message}</div></div>`;
+        :'Lighthouse could not audit this page: '+esc(j.error.message)+'<br><span style="font-size:11px">Heavy pages sometimes fail Google&rsquo;s runner — try again, or switch strategy.</span>'}</div></div>`;
       return;
     }
     rep.innerHTML=lighthouseHTML(j,url);
