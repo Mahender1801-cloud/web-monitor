@@ -63,21 +63,28 @@ function timeOnPage() { return Math.round(engagedMs + (visStart !== null ? perfo
 // ============================================================================
 function stampCart() {
   try {
-    // Stamped on EVERY page view, not once per visit. Shopify does not reliably
-    // persist attributes written to an EMPTY cart, so a single stamp on the
-    // landing page was frequently lost — which is why most orders came through
-    // with no journey link. Re-stamping is one tiny POST and guarantees the
-    // attribute is present on whatever cart exists when they check out.
-    // keepalive: survives the navigation of a fast add-to-cart -> checkout flow.
     fetch('/cart/update.js', {
       method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ attributes: { _rum_sid: sessionId, _rum_gid: gaClientId || '' } })
     }).catch(() => {});
   } catch {}
 }
-stampCart();
-// Re-stamp when the shopper returns to the tab — covers carts built in another tab.
-addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') stampCart(); });
+// Stamp ONCE per visit as a baseline, then again at every purchase-intent moment
+// (add to cart / open cart / checkout / Buy now) — that is when a cart actually
+// exists, which is when the attribute sticks. Stamping on literally every page
+// view cost ~12k extra Shopify cart writes a day and bought almost nothing:
+// measured over a full day it produced 5 exact links while checkout-intent
+// inference produced 14.
+function stampOnce() {
+  try {
+    if (sessionStorage.getItem('_rum_stamped')) return;
+    sessionStorage.setItem('_rum_stamped', '1');
+  } catch {}
+  stampCart();
+}
+// Run the baseline stamp when the browser is idle so it never competes with the
+// page's own critical work.
+(window.requestIdleCallback || (f => setTimeout(f, 1500)))(stampOnce);
 
 // ============================================================================
 // FUNNEL EVENTS — a light beacon for the steps that aren't page views
@@ -144,8 +151,17 @@ function isCheckoutTarget(t) {
     return !!el && /check\s*out|buy it now|buy now|place order/i.test((el.textContent || el.value || '').trim());
   } catch { return false; }
 }
+const BUYNOW_SEL = '.shopify-payment-button__button,[data-shopify="payment-button"],'
+  + '[class*="buy-now" i],[class*="buy_now" i],[id*="buy-now" i],[data-testid*="Checkout-button" i]';
 addEventListener('click', (e) => {
-  try { if (isCheckoutTarget(e.target)) { sendEvent('checkout_click'); stampCart(); } } catch {}
+  try {
+    const t = e.target;
+    if (!t || !t.closest) return;
+    // Buy-now bypasses the cart, so report it separately — it is the strongest
+    // possible signal for an order that will carry no cart attribute.
+    if (t.closest(BUYNOW_SEL)) { sendEvent('buy_now'); stampCart(); return; }
+    if (isCheckoutTarget(t)) { sendEvent('checkout_click'); stampCart(); }
+  } catch {}
 }, { capture: true, passive: true });
 
 // Cart-viewed intent: on drawer-cart themes there is no /cart page navigation to

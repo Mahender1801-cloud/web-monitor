@@ -1119,6 +1119,7 @@ const money=v=>(v==null?'—':'₹'+Math.round(v).toLocaleString('en-IN'));
 // Why an order is linked — shown on hover so an inferred match is never mistaken
 // for a certain one.
 const LINK_WHY={stamp:'Exact: the cart carried this shopper’s session id',
+  buynow:'Very strong: this session clicked Buy now moments before the order',
   checkout:'Strong: this session clicked checkout just before the order',
   cart:'Good: this session opened the cart just before the order',
   atc:'Weaker: this session added to cart shortly before the order'};
