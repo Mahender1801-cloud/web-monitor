@@ -32,5 +32,6 @@ jobs:
           SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
           SHOPIFY_TOKEN:         ${{ secrets.SHOPIFY_TOKEN }}
           SHOPIFY_BACKFILL_DAYS: ${{ secrets.SHOPIFY_BACKFILL_DAYS }}
+          ALERT_WEBHOOK:         ${{ secrets.ALERT_WEBHOOK }}
           RUN_TYPE:             scheduled
         run: node scripts/check.mjs

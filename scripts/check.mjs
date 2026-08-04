@@ -25,6 +25,7 @@ const SHOPIFY_TOKEN  = process.env.SHOPIFY_TOKEN || '';        // legacy custom-
 const SHOPIFY_CLIENT_ID     = process.env.SHOPIFY_CLIENT_ID || '';     // Dev-Dashboard app Client ID
 const SHOPIFY_CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET || ''; // Dev-Dashboard app Secret
 const SHOPIFY_BACKFILL_DAYS = +(process.env.SHOPIFY_BACKFILL_DAYS || 0); // one-time deep pull
+const ALERT_WEBHOOK = process.env.ALERT_WEBHOOK || '';  // Slack/Discord/any POST-to-message endpoint
 
 if (!SUPABASE_URL || !SERVICE_KEY) {
   console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_KEY'); process.exit(1);
@@ -324,6 +325,121 @@ async function scanCatalog(origin) {
   } catch (e) { console.error('Catalog scan failed:', e.message); }
 }
 
+// ---- Top-brand benchmarking -------------------------------------------------
+// "Is 2.2s good?" is unanswerable without the market. PageSpeed returns Chrome UX
+// Report data for sites with enough traffic — real visitors on those brands, not a
+// lab test — so this is a genuine competitive read rather than a synthetic one.
+const BRANDS = [
+  ['Lenskart',      'https://www.lenskart.com/',      'India'],
+  ['Titan Eyeplus', 'https://www.titaneyeplus.com/',  'India'],
+  ['John Jacobs',   'https://www.johnjacobs.com/',    'India'],
+  ['Specsmakers',   'https://www.specsmakers.com/',   'India'],
+  ['Eyewearlabs',   'https://eyewearlabs.com/',       'India'],
+  ['Intellilens',   'https://intellilens.in/',        'India'],
+  ['Ray-Ban',       'https://www.ray-ban.com/india',  'Global'],
+  ['Oakley',        'https://www.oakley.com/en-in',   'Global'],
+  ['Warby Parker',  'https://www.warbyparker.com/',   'Global'],
+  ['Zenni Optical', 'https://www.zennioptical.com/',  'Global'],
+  ['EyeBuyDirect',  'https://www.eyebuydirect.com/',  'Global'],
+  ['GlassesUSA',    'https://www.glassesusa.com/',    'Global'],
+  ['Sunglass Hut',  'https://www.sunglasshut.com/',   'Global'],
+  ['Glasses.com',   'https://www.glasses.com/',       'Global']
+];
+
+async function benchmarkBrands() {
+  // Once a day is plenty: CrUX only refreshes daily and each call is a real audit.
+  try {
+    const recent = await sbSelect('benchmarks', 'select=created_at&order=created_at.desc&limit=1');
+    if (recent.length && Date.now() - +new Date(recent[0].created_at) < 20 * 3600 * 1000) {
+      console.log('Benchmarks: already run today - skipping.');
+      return;
+    }
+  } catch {}
+  const rows = [];
+  for (const [brand, url, region] of BRANDS) {
+    try {
+      const j = await psiRaw(url, 'mobile');
+      const lab = (j.lighthouseResult && j.lighthouseResult.audits) || {};
+      const crux = (j.loadingExperience && j.loadingExperience.metrics) || {};
+      const score = j.lighthouseResult && j.lighthouseResult.categories
+        && j.lighthouseResult.categories.performance
+        && j.lighthouseResult.categories.performance.score;
+      const totalBytes = lab['total-byte-weight'] && lab['total-byte-weight'].numericValue;
+      const reqs = lab['network-requests'] && lab['network-requests'].details
+        && lab['network-requests'].details.items && lab['network-requests'].details.items.length;
+      const cls = crux['CUMULATIVE_LAYOUT_SHIFT_SCORE'];
+      rows.push({
+        brand, url, region, strategy: 'mobile',
+        perf_score: score != null ? Math.round(score * 100) : null,
+        lcp_field: crux['LARGEST_CONTENTFUL_PAINT_MS'] ? crux['LARGEST_CONTENTFUL_PAINT_MS'].percentile : null,
+        inp_field: crux['INTERACTION_TO_NEXT_PAINT'] ? crux['INTERACTION_TO_NEXT_PAINT'].percentile : null,
+        cls_field: cls ? cls.percentile / 100 : null,
+        lcp_lab: lab['largest-contentful-paint'] ? Math.round(lab['largest-contentful-paint'].numericValue) : null,
+        tbt_lab: lab['total-blocking-time'] ? Math.round(lab['total-blocking-time'].numericValue) : null,
+        weight_kb: totalBytes ? Math.round(totalBytes / 1024) : null,
+        requests: reqs || null
+      });
+      const last = rows[rows.length - 1];
+      console.log('  bench', brand, 'score', last.perf_score, 'lcp', last.lcp_field);
+    } catch (e) {
+      console.error('  bench fail', brand, String(e.message).slice(0, 80));
+    }
+    await sleep(2500);                       // stay well inside the PSI quota
+  }
+  if (rows.length) await sbInsert('benchmarks', rows);
+  console.log('Benchmarks: ' + rows.length + ' brands recorded.');
+}
+
+// Thin PSI call returning the raw payload (the existing psi() reshapes it).
+async function psiRaw(url, strategy) {
+  const api = new URL('https://www.googleapis.com/pagespeedonline/v5/runPagespeed');
+  api.searchParams.set('url', url);
+  api.searchParams.set('strategy', strategy);
+  api.searchParams.append('category', 'performance');
+  if (PSI_KEY) api.searchParams.set('key', PSI_KEY);
+  const r = await fetch(api, { signal: AbortSignal.timeout(90000) });
+  const j = await r.json();
+  if (j.error) throw new Error(String(j.error.message).slice(0, 90));
+  return j;
+}
+
+// ---- Deploy detection -------------------------------------------------------
+// Shopify fingerprints theme assets (theme.js?v=123456). A changed fingerprint
+// means something shipped, which is the moment worth comparing metrics around.
+async function detectDeploy(homepage) {
+  try {
+    const { text } = await timedGet(homepage);
+    const matches = [...text.matchAll(/\/cdn\/shop\/t\/\d+\/assets\/[\w.-]+\?v=(\d+)/g)].map(x => x[1]);
+    if (!matches.length) return;
+    const version = matches.sort().slice(-1)[0];
+    const seen = await sbSelect('deploys', 'select=id&version=eq.' + encodeURIComponent(version));
+    if (seen.length) return;
+    await sbInsert('deploys', [{ version, note: 'theme asset fingerprint changed' }]);
+    console.log('Deploy detected:', version);
+  } catch (e) { console.error('Deploy detection failed:', e.message); }
+}
+
+// ---- Alerts -----------------------------------------------------------------
+// The rules live in SQL next to the data; this fires them and forwards anything
+// new to a webhook if one is configured (Slack, Discord, or any service that turns
+// a POST into a WhatsApp/email message).
+async function runAlerts() {
+  try {
+    const r = await fetch(SUPABASE_URL + '/rest/v1/rpc/alert_scan', { method: 'POST', headers: H, body: '{}' });
+    const raised = r.ok ? Number(await r.text()) : 0;
+    console.log('Alerts: ' + raised + ' raised.');
+    if (!raised || !ALERT_WEBHOOK) return;
+    const open = await sbSelect('alerts',
+      'select=severity,title,detail,value&acknowledged=eq.false&order=created_at.desc&limit=5');
+    if (!open.length) return;
+    const lines = open.map(a => (a.severity === 'critical' ? 'CRITICAL' : 'WARNING') + ' - ' + a.title + ': ' + (a.detail || ''));
+    await fetch(ALERT_WEBHOOK, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'Hashtag Eyewear monitor\n' + lines.join('\n') })
+    }).catch(e => console.error('webhook:', e.message));
+  } catch (e) { console.error('Alert scan failed:', e.message); }
+}
+
 // ---- PageSpeed Insights ----------------------------------------------------
 async function psi(url, strategy) {
   const api = new URL('https://www.googleapis.com/pagespeedonline/v5/runPagespeed');
@@ -610,6 +726,10 @@ async function runAuto(key, monitor, homepage) {
   await scanVendors(homepage);
   await scanCatalog(origin(homepage));
 
+  // 0e) Market benchmark, deploy detection
+  await benchmarkBrands();
+  await detectDeploy(homepage);
+
   // 1) PageSpeed for every monitor, mobile + desktop
   const psiRows = [];
   for (const mon of monitors) {
@@ -664,6 +784,8 @@ async function runAuto(key, monitor, homepage) {
   }
   checkRows.forEach(r => delete r._k);
   if (checkRows.length) await sbInsert('task_checks', checkRows);
+  // Alerts run last so they can see everything this run collected.
+  await runAlerts();
   console.log(`Done. ${psiRows.length} PSI rows, ${checkRows.length} task checks.`);
 })().catch(e => { console.error(e); process.exit(1); });
 

@@ -637,8 +637,18 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
         </p>
       </section>
 
+      <!-- TOP BRANDS -->
+      <section class="view" data-view="brands">
+        <div id="benchBox"></div>
+      </section>
+
       <!-- HEALTH -->
       <section class="view" data-view="health">
+        <div id="alertBox"></div>
+        <div class="section-h"><h2>What this is costing</h2><span id="moneyNote">conversion by speed band, measured on this store’s own orders</span></div>
+        <div id="moneyBox"></div>
+        <div class="section-h"><h2>Do these first</h2><span>ranked by impact, not by category</span></div>
+        <div id="prioBox"></div>
         <div class="section-h"><h2>Optimisation audit</h2><span id="optNote">what is slowing the store down, and what to change</span></div>
         <div id="optBox"></div>
         <div class="section-h"><h2>Purchase path</h2><span>a real browser walks add-to-cart → checkout every hour</span></div>
@@ -863,6 +873,7 @@ function buildNav(){
     ${navBtn('purchases','Purchases','🛒')}
     ${navBtn('visitors','Visitors','👣')}
     ${navBtn('health','Health','🩺')}
+    ${navBtn('brands','Top brands','🏆')}
     ${navBtn('monitors','Monitors','🔗')}
     ${navBtn('webscore','Web Score','🎯')}
     <h4>QA Tasks</h4>`;
@@ -926,10 +937,10 @@ function toggleSide(force){
   document.getElementById('side').classList.toggle('open', open);
   document.getElementById('backdrop').classList.toggle('on', open);
 }
-const TITLES={summary:['Summary','Real-user performance across the store'],webvitals:['Web Vitals','Live from your visitors · PageSpeed as cross-check'],live:['Live Data','Raw events streaming from real visitors'],purchases:['Purchases','Real orders · what each buyer actually experienced'],visitors:['Visitors','Every visitor’s footprint · pages, time, source · click to see their path'],health:['Health','Anomalies, breakage, vendors, catalog &amp; the real purchase path'],monitors:['Monitors','Per-page Web Vitals by device · 10-day daily sparklines'],webscore:['Web Score','Score & compare any URL — no PageSpeed API needed']};
+const TITLES={summary:['Summary','Real-user performance across the store'],webvitals:['Web Vitals','Live from your visitors · PageSpeed as cross-check'],live:['Live Data','Raw events streaming from real visitors'],purchases:['Purchases','Real orders · what each buyer actually experienced'],visitors:['Visitors','Every visitor’s footprint · pages, time, source · click to see their path'],health:['Health','Anomalies, breakage, vendors, catalog &amp; the real purchase path'],brands:['Top brands','How this store compares with the leading eyewear retailers'],monitors:['Monitors','Per-page Web Vitals by device · 10-day daily sparklines'],webscore:['Web Score','Score & compare any URL — no PageSpeed API needed']};
 function setTitle(t,s){document.getElementById('vtitle').textContent=t;document.getElementById('vsub').textContent=s;}
 function showView(v){document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on', s.dataset.view===v));}
-function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderCWV();renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='purchases')renderPurchases(); if(v==='visitors')renderVisitors(); if(v==='health')renderHealth(); if(v==='monitors')renderMonitors(); if(v==='webscore')renderWebScore(); }
+function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderCWV();renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='purchases')renderPurchases(); if(v==='visitors')renderVisitors(); if(v==='health')renderHealth(); if(v==='brands')renderBrands(); if(v==='monitors')renderMonitors(); if(v==='webscore')renderWebScore(); }
 
 /* ===================== WEB SCORE (scores any URL via /api/score, no PSI API) === */
 const scoreColor=s=>s==null?'na':(s>=90?'good':s>=50?'warn':'poor');
@@ -1519,6 +1530,10 @@ const fetchRegress  = (f,t) => { const from=Math.max(f, t-2*86400000);   // last
   return cachedRpc('regression_attribution', {p_from:iso(from),p_to:iso(t),p_metric:'lcp'}, 'reg_'+from+'_'+t); };
 const fetchSlo      = (f,t) => cachedRpc('slo_status',             {p_from:iso(f),p_to:iso(t)},                'slo_'+f+'_'+t);
 const fetchCoHealth = (f,t) => cachedRpc('checkout_health',        {p_from:iso(f),p_to:iso(t)},                'coh_'+f+'_'+t);
+const fetchMoney    = (f,t) => cachedRpc('speed_revenue',    {p_from:iso(f),p_to:iso(t)}, 'money_'+f+'_'+t);
+const fetchPriority = (f,t) => cachedRpc('priorities',       {p_from:iso(f),p_to:iso(t)}, 'prio_'+f+'_'+t);
+const fetchAlerts   = ()    => cachedRpc('open_alerts',      {},                          'alr_'+nowQ());
+const fetchBench    = ()    => cachedRpc('benchmark_report', {p_strategy:'mobile'},       'bm_'+new Date().toDateString());
 const fetchOptimize = ()    => cachedRpc('optimize_report', {}, 'opt_'+new Date().toDateString());
 const fetchDiag     = (f,t) => cachedRpc('error_diagnosis', {p_from:iso(f),p_to:iso(t)}, 'diag_'+f+'_'+t);
 const fetchStruggle = (f,t) => cachedRpc('struggle_detail', {p_from:iso(f),p_to:iso(t)}, 'strg_'+f+'_'+t);
@@ -1698,6 +1713,128 @@ function paintOptimize(o){
   el.innerHTML=h;
 }
 
+/* ===================== MONEY / PRIORITIES / ALERTS / BRANDS ============== */
+const inr = v => v==null ? '—' : '₹' + Math.round(v).toLocaleString('en-IN');
+
+function paintAlerts(rows){
+  const el=document.getElementById('alertBox'); if(!el) return;
+  if(!rows||!rows.length){ el.innerHTML=''; return; }
+  el.innerHTML='<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:18px">'
+    + rows.map(a=>{
+        const [id,sev,title,detail,src,val,at]=a;
+        const c = sev==='critical' ? 'poor' : 'warn';
+        return '<div class="repcard" style="border-left:4px solid var(--'+(sev==='critical'?'poor':'warn')+')">'
+          + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+          +   '<span class="cellval '+c+'">'+esc(sev.toUpperCase())+'</span>'
+          +   '<b style="font-size:13.5px">'+esc(title)+'</b>'
+          +   '<span style="font-size:11.5px;color:var(--faint);margin-left:auto">'+new Date(at).toLocaleString()+'</span>'
+          +   '<button class="raw-btn" onclick="ackAlert('+id+')">dismiss</button>'
+          + '</div>'
+          + (detail?'<div style="font-size:12.5px;color:var(--muted);margin-top:5px">'+esc(detail)+'</div>':'')
+          + '</div>';
+      }).join('')
+    + '</div>';
+}
+async function ackAlert(id){
+  try{ await sb.from('alerts').update({acknowledged:true}).eq('id',id); }catch{}
+  delete rpcCache['alr_'+nowQ()];
+  fetchAlerts().then(r=>paintAlerts(r||[]));
+}
+
+function paintMoney(m){
+  const el=document.getElementById('moneyBox'); if(!el) return;
+  if(!m){ el.innerHTML='<div class="empty" style="padding:10px">Loading…</div>'; return; }
+  if(!m.bands||!m.bands.length){ el.innerHTML=needSql('pro_monitoring.sql'); return; }
+  const days=+m.days||7, perMonth = (+m.lost_revenue||0)/days*30;
+  const note=document.getElementById('moneyNote');
+  if(note) note.textContent='conversion by speed band, measured on this store\u2019s own orders · '+days+' days';
+  let h='<div class="repgrid">'
+    + hcard('Revenue at risk', inr(m.lost_revenue), 'over '+days+' days', (+m.lost_revenue)>0?'poor':'good')
+    + hcard('Per month', inr(perMonth), 'at the same rate', (+perMonth)>0?'poor':'good')
+    + hcard('Orders lost', (m.lost_orders||0).toLocaleString(), 'to slower sessions')
+    + hcard('Slow sessions', (m.slow_sessions||0).toLocaleString(), 'above 2.5s')
+    + '</div>';
+  h+='<div class="wv"><table><thead><tr><th>Speed band</th><th class="m">Sessions</th><th class="m">Orders</th><th class="m">Conversion</th></tr></thead><tbody>'
+    + m.bands.map(b=>{
+        const [band,sessions,orders,cvr]=b;
+        const fast=/Fast/.test(band);
+        return '<tr><td class="pg">'+esc(band)+'</td>'
+          +'<td class="cell mono">'+(+sessions).toLocaleString()+'</td>'
+          +'<td class="cell mono">'+(+orders).toLocaleString()+'</td>'
+          +'<td class="cell"><span class="cellval '+(fast?'good':'poor')+'">'+(+cvr).toFixed(3)+'%</span></td></tr>';
+      }).join('')
+    + '</tbody></table></div>'
+    + '<div style="font-size:11.5px;color:var(--faint);margin-top:8px">'
+    + 'Read this as a correlation, not a proof. Slow sessions also skew towards older phones and weaker networks, '
+    + 'and those shoppers may convert differently for reasons besides speed. It is still measured on your own orders '
+    + 'rather than an industry rule of thumb, and the AOV used is ' + inr(m.aov) + '.</div>';
+  el.innerHTML=h;
+}
+
+function paintPriorities(p){
+  const el=document.getElementById('prioBox'); if(!el) return;
+  if(!p){ el.innerHTML='<div class="empty" style="padding:10px">Loading…</div>'; return; }
+  const items=p.items||[];
+  if(!items.length){ el.innerHTML='<div class="empty" style="padding:14px">Nothing outstanding — run the optimisation audit to populate this.</div>'; return; }
+  el.innerHTML='<div style="display:flex;flex-direction:column;gap:9px">'
+    + items.map((x,i)=>{
+        const [area,name,status,value,advice,money]=x;
+        return '<div class="repcard">'
+          + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+          +   '<span class="cellval '+(status==='fail'?'poor':'warn')+'" style="min-width:26px;text-align:center">'+(i+1)+'</span>'
+          +   '<b style="font-size:13px">'+esc(name)+'</b>'
+          +   '<span class="chip" style="font-size:11px">'+esc(area)+'</span>'
+          +   '<span class="mono" style="font-size:12px;color:var(--muted)">'+esc(value||'')+'</span>'
+          +   (+money>0?'<span class="cellval poor" style="margin-left:auto">worth ~'+inr(money)+'</span>':'')
+          + '</div>'
+          + '<div style="font-size:12.5px;color:var(--muted);margin-top:6px;line-height:1.6">'+esc(advice||'')+'</div>'
+          + '</div>';
+      }).join('')
+    + '</div>'
+    + '<div style="font-size:11.5px;color:var(--faint);margin-top:10px">'
+    + 'Money is only attached to speed-related work, because that is the one link this store can evidence from its own orders. '
+    + 'The rest is ranked by how directly it blocks a purchase.</div>';
+}
+
+function renderBrands(){
+  const el=document.getElementById('benchBox');
+  el.innerHTML='<div class="empty" style="padding:14px">Loading market data…</div>';
+  fetchBench().then(b=>{
+    if(curView!=='brands') return;
+    if(!b||!b.brands||!b.brands.length){
+      el.innerHTML='<div class="empty" style="padding:16px">No benchmark yet — run <b>benchmarks.sql</b>, then the <b>Site monitor</b> workflow. It audits the leading eyewear retailers once a day.</div>';
+      return;
+    }
+    const ours=b.ours||{};
+    let h='<div class="repgrid">'
+      + hcard('Your LCP', ours.lcp?fmtMs(ours.lcp):'—', 'real visitors, last 28 days', ours.lcp<=2500?'good':ours.lcp<=4000?'warn':'poor')
+      + hcard('Market median', b.median_lcp?fmtMs(b.median_lcp):'—', 'across these brands')
+      + hcard('Your rank', b.rank_lcp?('#'+b.rank_lcp+' of '+(b.total||0)):'—', 'fastest first')
+      + hcard('Your INP', ours.inp?fmtMs(ours.inp):'—', 'real visitors', ours.inp<=200?'good':ours.inp<=500?'warn':'poor')
+      + '</div>';
+    h+='<div class="section-h"><h2>Leading eyewear retailers</h2><span>field data from Chrome UX Report — real visitors on those sites, not a lab test</span></div>';
+    h+='<div class="wv"><table><thead><tr><th>Brand</th><th>Region</th><th class="m">PSI score</th><th class="m">LCP</th><th class="m">INP</th><th class="m">CLS</th><th class="m">Page weight</th></tr></thead><tbody>'
+      + b.brands.map(x=>{
+          const [brand,region,score,lcp,inp,cls,kbv,isUs]=x;
+          const hl = isUs ? ' style="background:var(--accent-soft);font-weight:600"' : '';
+          const band=(v,g,n)=>v==null?'na':(v<=g?'good':v<=n?'warn':'poor');
+          return '<tr'+hl+'><td class="pg">'+esc(brand)+(isUs?' &larr; you':'')+'</td>'
+            +'<td style="font-size:12px;color:var(--muted)">'+esc(region||'')+'</td>'
+            +'<td class="cell">'+(score==null?'—':'<span class="cellval '+(score>=90?'good':score>=50?'warn':'poor')+'">'+score+'</span>')+'</td>'
+            +'<td class="cell">'+(lcp==null?'—':'<span class="cellval '+band(lcp,2500,4000)+'">'+fmtMs(lcp)+'</span>')+'</td>'
+            +'<td class="cell">'+(inp==null?'—':'<span class="cellval '+band(inp,200,500)+'">'+fmtMs(inp)+'</span>')+'</td>'
+            +'<td class="cell">'+(cls==null?'—':'<span class="cellval '+band(+cls,0.1,0.25)+'">'+(+cls).toFixed(2)+'</span>')+'</td>'
+            +'<td class="cell mono">'+(kbv?Math.round(kbv/1024*10)/10+' MB':'—')+'</td></tr>';
+        }).join('')
+      + '</tbody></table></div>'
+      + '<div style="font-size:11.5px;color:var(--faint);margin-top:10px">'
+      + 'LCP, INP and CLS here are the 75th percentile of real visits collected by Chrome, so they describe what customers '
+      + 'actually experience on those sites. A blank means Chrome does not publish enough traffic for that origin. '
+      + 'Your own row is measured from your own collector over the last 28 days.</div>';
+    el.innerHTML=h;
+  });
+}
+
 function renderHealth(){
   const cur=windowRange();
   ['synthBox','anomBox','coBox','regBox','errBox','vendBox','catBox','sloBox']
@@ -1762,6 +1899,13 @@ function renderHealth(){
       ? '<div class="repgrid">'+h.catalog.map(c=>hcard(CL[c[0]]||c[0],(+c[1]).toLocaleString(),'products affected','warn')).join('')+'</div>'
       : '<div class="empty" style="padding:14px">No catalog scan yet — the scheduled job walks the full catalog on its next run.</div>';
   });
+
+  // ---- alerts, money and priorities first: what to act on ----------------
+  fetchAlerts().then(r=>{ if(curView==='health') paintAlerts(r||[]); });
+  paintMoney(null);
+  fetchMoney(cur.from,cur.to).then(m=>{ if(curView==='health') paintMoney(m); });
+  paintPriorities(null);
+  fetchPriority(cur.from,cur.to).then(pr=>{ if(curView==='health') paintPriorities(pr); });
 
   // ---- optimisation audit -------------------------------------------------
   paintOptimize(null);
