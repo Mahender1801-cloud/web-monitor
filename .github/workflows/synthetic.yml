@@ -24,6 +24,16 @@ jobs:
       - name: Stagger the start
         # Random 0-4 minute offset so runs never land on the same second twice.
         run: sleep $((RANDOM % 240))
+      - name: Optimisation audit
+        # Same runner and browser install as the journey below, so this costs
+        # nothing extra. Continues on error: a blocked page must not hide the
+        # purchase-path result, which is the more important signal.
+        continue-on-error: true
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          STORE_URL:            https://hashtageyewears.com
+        run: node scripts/optimize_audit.mjs
       - name: Walk the purchase path
         env:
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}

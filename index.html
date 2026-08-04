@@ -639,6 +639,8 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
 
       <!-- HEALTH -->
       <section class="view" data-view="health">
+        <div class="section-h"><h2>Optimisation audit</h2><span id="optNote">what is slowing the store down, and what to change</span></div>
+        <div id="optBox"></div>
         <div class="section-h"><h2>Purchase path</h2><span>a real browser walks add-to-cart → checkout every hour</span></div>
         <div id="synthBox"></div>
         <div class="section-h"><h2>Anomaly scan</h2><span>today vs the same weekday over the last 4 weeks</span></div>
@@ -1517,6 +1519,7 @@ const fetchRegress  = (f,t) => { const from=Math.max(f, t-2*86400000);   // last
   return cachedRpc('regression_attribution', {p_from:iso(from),p_to:iso(t),p_metric:'lcp'}, 'reg_'+from+'_'+t); };
 const fetchSlo      = (f,t) => cachedRpc('slo_status',             {p_from:iso(f),p_to:iso(t)},                'slo_'+f+'_'+t);
 const fetchCoHealth = (f,t) => cachedRpc('checkout_health',        {p_from:iso(f),p_to:iso(t)},                'coh_'+f+'_'+t);
+const fetchOptimize = ()    => cachedRpc('optimize_report', {}, 'opt_'+new Date().toDateString());
 const fetchDiag     = (f,t) => cachedRpc('error_diagnosis', {p_from:iso(f),p_to:iso(t)}, 'diag_'+f+'_'+t);
 const fetchStruggle = (f,t) => cachedRpc('struggle_detail', {p_from:iso(f),p_to:iso(t)}, 'strg_'+f+'_'+t);
 const fetchScripts  = ()    => cachedRpc('script_report',  {},                         'scr_'+new Date().toDateString());
@@ -1637,6 +1640,64 @@ function paintStruggle(d){
     + 'An icon or a label showing up here usually means the click target is the wrapper, not the child — the tap lands but does nothing.</div>';
 }
 
+const AREA_ICON={Images:'🖼',JavaScript:'⚙',CSS:'🎨',Fonts:'🔤',Delivery:'🚚'};
+function paintOptimize(o){
+  const el=document.getElementById('optBox'); if(!el) return;
+  if(!o){ el.innerHTML='<div class="empty" style="padding:10px">Loading…</div>'; return; }
+  if(!o.checks){ el.innerHTML='<div class="empty" style="padding:14px">No audit yet — run <b>optimize_audit.sql</b>, then the <b>Synthetic checkout</b> workflow.</div>'; return; }
+  const note=document.getElementById('optNote');
+  if(note) note.textContent = o.checks+' checks across '+o.pages+' page templates · '+new Date(o.run_at).toLocaleString();
+  const sc=+o.score||0;
+  let h='<div class="repgrid">'
+    + hcard('Score', sc+'/100', o.pass+' of '+o.checks+' checks pass', sc>=80?'good':sc>=55?'warn':'poor')
+    + hcard('Needs fixing', (o.fail||0).toLocaleString(), 'failing checks', o.fail?'poor':'good')
+    + hcard('Worth improving', (o.warn||0).toLocaleString(), 'warnings', o.warn?'warn':'good')
+    + hcard('Templates audited', (o.pages||0), 'home, product, collection')
+    + '</div>';
+
+  if((o.areas||[]).length){
+    h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 14px">'
+      + o.areas.map(a=>{
+          const [area,n,pass,warn,fail]=a;
+          const cls = fail?'poor':warn?'warn':'good';
+          return '<span class="chip" style="font-size:12px">'+(AREA_ICON[area]||'')+' '+esc(area)
+            +' <b class="cellval '+cls+'" style="margin-left:4px">'+pass+'/'+n+'</b></span>';
+        }).join('')
+      + '</div>';
+  }
+
+  const issues=o.issues||[];
+  if(!issues.length){
+    h+='<div class="empty" style="padding:14px">Everything measured is passing.</div>';
+  }else{
+    h+='<div style="display:flex;flex-direction:column;gap:9px">'
+      + issues.map(x=>{
+          const [area,name,status,value,advice,page]=x;
+          let short=page||''; try{ short=new URL(page).pathname||'/'; }catch{}
+          return '<div class="repcard">'
+            + '<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">'
+            +   '<span class="cellval '+(status==='fail'?'poor':'warn')+'">'+(status==='fail'?'FIX':'IMPROVE')+'</span>'
+            +   '<b style="font-size:13px">'+(AREA_ICON[area]||'')+' '+esc(name)+'</b>'
+            +   '<span class="mono" style="font-size:12px;color:var(--muted)">'+esc(value||'')+'</span>'
+            +   '<span style="font-size:11.5px;color:var(--faint);margin-left:auto">'+esc(short)+'</span>'
+            + '</div>'
+            + '<div style="font-size:12.5px;line-height:1.6;margin-top:6px;color:var(--muted)">'+esc(advice||'')+'</div>'
+            + '</div>';
+        }).join('')
+      + '</div>';
+  }
+  if((o.passing||[]).length){
+    h+='<div style="font-size:12px;color:var(--muted);margin:14px 0 6px">Already good ('+o.passing.length+')</div>'
+      + '<div style="display:flex;gap:6px;flex-wrap:wrap">'
+      + o.passing.map(x=>'<span class="chip" style="font-size:11.5px" title="'+esc(x[2]||'')+'">✓ '+esc(x[1])+'</span>').join('')
+      + '</div>';
+  }
+  h+='<div style="font-size:11.5px;color:var(--faint);margin-top:12px">'
+    + 'This audits the live store and tells you what to change — it never edits your theme. '
+    + 'Paid speed apps make these changes for you; the trade is that they rewrite your theme output.</div>';
+  el.innerHTML=h;
+}
+
 function renderHealth(){
   const cur=windowRange();
   ['synthBox','anomBox','coBox','regBox','errBox','vendBox','catBox','sloBox']
@@ -1701,6 +1762,10 @@ function renderHealth(){
       ? '<div class="repgrid">'+h.catalog.map(c=>hcard(CL[c[0]]||c[0],(+c[1]).toLocaleString(),'products affected','warn')).join('')+'</div>'
       : '<div class="empty" style="padding:14px">No catalog scan yet — the scheduled job walks the full catalog on its next run.</div>';
   });
+
+  // ---- optimisation audit -------------------------------------------------
+  paintOptimize(null);
+  fetchOptimize().then(o=>{ if(curView==='health') paintOptimize(o); });
 
   // ---- why the errors happen ---------------------------------------------
   paintDiagnosis(null);
