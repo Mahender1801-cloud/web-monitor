@@ -226,14 +226,41 @@ const run = async () => {
       }
     }
     if (!btn) throw new Error('no visible checkout control on /cart');
-    await Promise.all([
-      page.waitForURL(/checkout|shiprocket|gokwik|razorpay|payment|snapmint/i, { timeout: 35000 }).catch(() => {}),
-      humanClick(page, btn).catch(e => { throw new Error('checkout click failed: ' + String(e.message).slice(0, 120)); })
-    ]);
-    await page.waitForTimeout(3000);
-    const u = page.url();
-    if (/\/cart\/?$/.test(u)) throw new Error('checkout click did not navigate (still on /cart)');
-    return new URL(u).host;
+    // What counts as a successful hand-off here is NOT necessarily a navigation.
+    // This store uses a third-party provider (Snapmint), and those commonly open
+    // checkout as an overlay, an iframe, or a new tab — in which case staying on
+    // /cart is correct behaviour, not a failure. Accept any of those, and record
+    // which one happened so the report says how checkout actually opens.
+    const before = page.url();
+    const label  = (await btn.innerText().catch(() => '') || '').trim().slice(0, 40);
+    const popupP = ctx.waitForEvent('page', { timeout: 20000 }).catch(() => null);
+
+    await humanClick(page, btn).catch(e => {
+      throw new Error('checkout click failed: ' + String(e.message).slice(0, 120));
+    });
+
+    // give whichever mechanism it uses time to appear
+    await page.waitForTimeout(4000);
+    const popup = await popupP;
+    if (popup) {
+      await popup.waitForLoadState('domcontentloaded').catch(() => {});
+      const h = (() => { try { return new URL(popup.url()).host; } catch { return popup.url(); } })();
+      return `new tab -> ${h} (clicked "${label}")`;
+    }
+
+    if (page.url() !== before) return `navigated -> ${new URL(page.url()).host} (clicked "${label}")`;
+
+    // an overlay or embedded checkout frame
+    const frame = page.frames().find(f => /checkout|snapmint|shiprocket|razorpay|gokwik|payment/i.test(f.url()));
+    if (frame) return `embedded frame -> ${new URL(frame.url()).host} (clicked "${label}")`;
+
+    const overlay = await page.locator(
+      '[class*="checkout" i][class*="modal" i], [class*="drawer" i][class*="checkout" i], ' +
+      '[id*="snapmint" i], iframe[src*="checkout" i], [role="dialog"]'
+    ).first().isVisible().catch(() => false);
+    if (overlay) return `overlay opened (clicked "${label}")`;
+
+    throw new Error(`clicked "${label}" but nothing opened — no navigation, tab, frame or overlay`);
   });
 
   AUDIT.scripts = [...netAll.values()];
