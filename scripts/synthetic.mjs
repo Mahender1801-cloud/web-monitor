@@ -189,22 +189,47 @@ const run = async () => {
     // We only verify the hand-off starts and where it goes — this store checks out
     // on a third party, which is exactly the leg that is invisible today.
     // This store checks out on a third party (Snapmint / Shiprocket), so Shopify's
-    // standard [name=checkout] control is not present. Match the same broad set the
-    // collector uses, and fall back to any control whose label reads like checkout.
-    const SEL = '[name="checkout"], button[name="checkout"], a[href*="/checkout"], '
-      + '[class*="checkout" i], [id*="checkout" i], [class*="buy-now" i], '
-      + '.shopify-payment-button__button, [data-shopify="payment-button"]';
-    let btn = page.locator(SEL).first();
-    if (!(await btn.count())) {
-      btn = page.getByRole('button', { name: /check\s*out|place order|buy now|proceed/i }).first();
+    // standard [name=checkout] control is not present. The broad selector below
+    // also matches hidden wrappers, which is why the click timed out rather than
+    // failing to find anything — so take the first candidate that is actually
+    // visible and enabled, exactly as a shopper would.
+    const CANDIDATES = [
+      '[name="checkout"]', 'button[name="checkout"]', 'a[href*="/checkout"]',
+      '.shopify-payment-button__button', '[data-shopify="payment-button"]',
+      'button[class*="checkout" i]', 'a[class*="checkout" i]',
+      '[id*="checkout" i]', '[class*="buy-now" i]'
+    ];
+    let btn = null;
+    for (const sel of CANDIDATES) {
+      const loc = page.locator(sel);
+      const n = await loc.count();
+      for (let i = 0; i < Math.min(n, 6); i++) {
+        const c = loc.nth(i);
+        if (await c.isVisible().catch(() => false) && await c.isEnabled().catch(() => false)) { btn = c; break; }
+      }
+      if (btn) break;
     }
-    if (!(await btn.count())) {
-      btn = page.locator('button, a').filter({ hasText: /check\s*out|proceed to pay|place order/i }).first();
+    if (!btn) {
+      const byText = page.getByRole('button', { name: /check\s*out|place order|buy now|proceed/i });
+      const n = await byText.count();
+      for (let i = 0; i < Math.min(n, 6); i++) {
+        const c = byText.nth(i);
+        if (await c.isVisible().catch(() => false)) { btn = c; break; }
+      }
     }
-    if (!(await btn.count())) throw new Error('no checkout control found on /cart');
+    if (!btn) {
+      const anyText = page.locator('button, a').filter({ hasText: /check\s*out|proceed to pay|place order/i });
+      const n = await anyText.count();
+      for (let i = 0; i < Math.min(n, 8); i++) {
+        const c = anyText.nth(i);
+        if (await c.isVisible().catch(() => false)) { btn = c; break; }
+      }
+    }
+    if (!btn) throw new Error('no visible checkout control on /cart');
     await Promise.all([
-      page.waitForURL(/checkout|shiprocket|gokwik|razorpay|payment|snapmint/i, { timeout: 30000 }).catch(() => {}),
-      humanClick(page, btn)
+      page.waitForURL(/checkout|shiprocket|gokwik|razorpay|payment|snapmint/i, { timeout: 35000 }).catch(() => {}),
+      humanClick(page, btn).catch(e => { throw new Error('checkout click failed: ' + e.message.split('
+')[0]); })
     ]);
     await page.waitForTimeout(3000);
     const u = page.url();
