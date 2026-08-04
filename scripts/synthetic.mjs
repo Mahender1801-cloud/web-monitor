@@ -103,8 +103,20 @@ const run = async () => {
   await step('checkout hand-off', async () => {
     // We only verify the hand-off starts and where it goes — this store checks out
     // on a third party, which is exactly the leg that is invisible today.
-    const btn = page.locator('[name="checkout"], button[name="checkout"], a[href*="/checkout"]').first();
-    if (!(await btn.count())) throw new Error('no checkout control on /cart');
+    // This store checks out on a third party (Snapmint / Shiprocket), so Shopify's
+    // standard [name=checkout] control is not present. Match the same broad set the
+    // collector uses, and fall back to any control whose label reads like checkout.
+    const SEL = '[name="checkout"], button[name="checkout"], a[href*="/checkout"], '
+      + '[class*="checkout" i], [id*="checkout" i], [class*="buy-now" i], '
+      + '.shopify-payment-button__button, [data-shopify="payment-button"]';
+    let btn = page.locator(SEL).first();
+    if (!(await btn.count())) {
+      btn = page.getByRole('button', { name: /check\s*out|place order|buy now|proceed/i }).first();
+    }
+    if (!(await btn.count())) {
+      btn = page.locator('button, a').filter({ hasText: /check\s*out|proceed to pay|place order/i }).first();
+    }
+    if (!(await btn.count())) throw new Error('no checkout control found on /cart');
     await Promise.all([
       page.waitForURL(/checkout|shiprocket|gokwik|razorpay|payment/i, { timeout: 30000 }).catch(() => {}),
       btn.click({ timeout: 15000 })

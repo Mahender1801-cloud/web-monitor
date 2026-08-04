@@ -1500,8 +1500,12 @@ function renderVisitors(keepOffset){
    says WHERE. Each panel degrades to a "run monitoring_v2.sql" hint rather than
    an error, so the tab is useful the moment each piece is installed.        */
 const fetchAnomaly  = ()    => cachedRpc('anomaly_scan',           {},                                        'anom_'+new Date().toDateString());
-const REG_MAX=2*DAY;   // compares against the preceding window too, so keep it recent
-const fetchRegress  = (f,t) => { const from=Math.max(f, t-REG_MAX);
+// NOTE: computed inside the function, not at declaration time. DAY is declared
+// further down the file, so `const REG_MAX = 2*DAY` at this point hit the temporal
+// dead zone and killed the whole script — every declaration after it (statsCache,
+// AUD_DIMS, PIVOT_DATA …) then never initialised and the dashboard fell back to
+// sample mode.
+const fetchRegress  = (f,t) => { const from=Math.max(f, t-2*86400000);   // last 48h
   return cachedRpc('regression_attribution', {p_from:iso(from),p_to:iso(t),p_metric:'lcp'}, 'reg_'+from+'_'+t); };
 const fetchSlo      = (f,t) => cachedRpc('slo_status',             {p_from:iso(f),p_to:iso(t)},                'slo_'+f+'_'+t);
 const fetchCoHealth = (f,t) => cachedRpc('checkout_health',        {p_from:iso(f),p_to:iso(t)},                'coh_'+f+'_'+t);
