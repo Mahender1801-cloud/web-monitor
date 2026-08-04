@@ -645,7 +645,7 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
         <div id="anomBox"></div>
         <div class="section-h"><h2>Checkout hand-off</h2><span>where the funnel leaves your site</span></div>
         <div id="coBox"></div>
-        <div class="section-h"><h2>What regressed</h2><span>which segment moved, not just the average</span></div>
+        <div class="section-h"><h2>What regressed</h2><span>last 48h vs the 48h before · which segment moved, not just the average</span></div>
         <div id="regBox"></div>
         <div class="section-h"><h2>Breakage &amp; frustration</h2><span>JS errors, rage clicks, dead clicks — what Web Vitals cannot see</span></div>
         <div id="errBox"></div>
@@ -1500,7 +1500,9 @@ function renderVisitors(keepOffset){
    says WHERE. Each panel degrades to a "run monitoring_v2.sql" hint rather than
    an error, so the tab is useful the moment each piece is installed.        */
 const fetchAnomaly  = ()    => cachedRpc('anomaly_scan',           {},                                        'anom_'+new Date().toDateString());
-const fetchRegress  = (f,t) => cachedRpc('regression_attribution', {p_from:iso(f),p_to:iso(t),p_metric:'lcp'}, 'reg_'+f+'_'+t);
+const REG_MAX=2*DAY;   // compares against the preceding window too, so keep it recent
+const fetchRegress  = (f,t) => { const from=Math.max(f, t-REG_MAX);
+  return cachedRpc('regression_attribution', {p_from:iso(from),p_to:iso(t),p_metric:'lcp'}, 'reg_'+from+'_'+t); };
 const fetchSlo      = (f,t) => cachedRpc('slo_status',             {p_from:iso(f),p_to:iso(t)},                'slo_'+f+'_'+t);
 const fetchCoHealth = (f,t) => cachedRpc('checkout_health',        {p_from:iso(f),p_to:iso(t)},                'coh_'+f+'_'+t);
 const fetchHealth   = (f,t) => cachedRpc('health_summary',         {p_from:iso(f),p_to:iso(t)},                'hs_'+f+'_'+t);
