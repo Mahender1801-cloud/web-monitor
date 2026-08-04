@@ -637,6 +637,26 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
         </p>
       </section>
 
+      <!-- HEALTH -->
+      <section class="view" data-view="health">
+        <div class="section-h"><h2>Purchase path</h2><span>a real browser walks add-to-cart → checkout every hour</span></div>
+        <div id="synthBox"></div>
+        <div class="section-h"><h2>Anomaly scan</h2><span>today vs the same weekday over the last 4 weeks</span></div>
+        <div id="anomBox"></div>
+        <div class="section-h"><h2>Checkout hand-off</h2><span>where the funnel leaves your site</span></div>
+        <div id="coBox"></div>
+        <div class="section-h"><h2>What regressed</h2><span>which segment moved, not just the average</span></div>
+        <div id="regBox"></div>
+        <div class="section-h"><h2>Breakage &amp; frustration</h2><span>JS errors, rage clicks, dead clicks — what Web Vitals cannot see</span></div>
+        <div id="errBox"></div>
+        <div class="section-h"><h2>Third-party budget</h2><span>per-vendor script weight</span></div>
+        <div id="vendBox"></div>
+        <div class="section-h"><h2>Catalog integrity</h2><span>whole catalog, not a sample</span></div>
+        <div id="catBox"></div>
+        <div class="section-h"><h2>Speed SLO</h2><span id="sloNote">95% of visitors should get LCP ≤ 2.5s</span></div>
+        <div id="sloBox"></div>
+      </section>
+
       <!-- MONITORS -->
       <section class="view" data-view="monitors">
         <div class="toolbar">
@@ -832,6 +852,7 @@ function buildNav(){
     ${navBtn('live','Live Data','⚡')}
     ${navBtn('purchases','Purchases','🛒')}
     ${navBtn('visitors','Visitors','👣')}
+    ${navBtn('health','Health','🩺')}
     ${navBtn('monitors','Monitors','🔗')}
     ${navBtn('webscore','Web Score','🎯')}
     <h4>QA Tasks</h4>`;
@@ -895,10 +916,10 @@ function toggleSide(force){
   document.getElementById('side').classList.toggle('open', open);
   document.getElementById('backdrop').classList.toggle('on', open);
 }
-const TITLES={summary:['Summary','Real-user performance across the store'],webvitals:['Web Vitals','Live from your visitors · PageSpeed as cross-check'],live:['Live Data','Raw events streaming from real visitors'],purchases:['Purchases','Real orders · what each buyer actually experienced'],visitors:['Visitors','Every visitor’s footprint · pages, time, source · click to see their path'],monitors:['Monitors','Per-page Web Vitals by device · 10-day daily sparklines'],webscore:['Web Score','Score & compare any URL — no PageSpeed API needed']};
+const TITLES={summary:['Summary','Real-user performance across the store'],webvitals:['Web Vitals','Live from your visitors · PageSpeed as cross-check'],live:['Live Data','Raw events streaming from real visitors'],purchases:['Purchases','Real orders · what each buyer actually experienced'],visitors:['Visitors','Every visitor’s footprint · pages, time, source · click to see their path'],health:['Health','Anomalies, breakage, vendors, catalog &amp; the real purchase path'],monitors:['Monitors','Per-page Web Vitals by device · 10-day daily sparklines'],webscore:['Web Score','Score & compare any URL — no PageSpeed API needed']};
 function setTitle(t,s){document.getElementById('vtitle').textContent=t;document.getElementById('vsub').textContent=s;}
 function showView(v){document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on', s.dataset.view===v));}
-function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderCWV();renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='purchases')renderPurchases(); if(v==='visitors')renderVisitors(); if(v==='monitors')renderMonitors(); if(v==='webscore')renderWebScore(); }
+function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderCWV();renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='purchases')renderPurchases(); if(v==='visitors')renderVisitors(); if(v==='health')renderHealth(); if(v==='monitors')renderMonitors(); if(v==='webscore')renderWebScore(); }
 
 /* ===================== WEB SCORE (scores any URL via /api/score, no PSI API) === */
 const scoreColor=s=>s==null?'na':(s>=90?'good':s>=50?'warn':'poor');
@@ -1471,6 +1492,151 @@ function renderVisitors(keepOffset){
       ? `<button class="btn" ${visOffset<=0?'disabled':''} onclick="visPage(-1)">← Newer</button>
          <span style="font-size:12px;color:var(--muted)">page ${cpage} / ${pages.toLocaleString()}</span>
          <button class="btn" ${to>=total?'disabled':''} onclick="visPage(1)">Older →</button>` : '';
+  });
+}
+
+/* ===================== HEALTH ==================================
+   The high-level layer: signals that say something IS wrong, and analysis that
+   says WHERE. Each panel degrades to a "run monitoring_v2.sql" hint rather than
+   an error, so the tab is useful the moment each piece is installed.        */
+const fetchAnomaly  = ()    => cachedRpc('anomaly_scan',           {},                                        'anom_'+new Date().toDateString());
+const fetchRegress  = (f,t) => cachedRpc('regression_attribution', {p_from:iso(f),p_to:iso(t),p_metric:'lcp'}, 'reg_'+f+'_'+t);
+const fetchSlo      = (f,t) => cachedRpc('slo_status',             {p_from:iso(f),p_to:iso(t)},                'slo_'+f+'_'+t);
+const fetchCoHealth = (f,t) => cachedRpc('checkout_health',        {p_from:iso(f),p_to:iso(t)},                'coh_'+f+'_'+t);
+const fetchHealth   = (f,t) => cachedRpc('health_summary',         {p_from:iso(f),p_to:iso(t)},                'hs_'+f+'_'+t);
+
+const hcard=(h,v,sub,cls)=>`<div class="repcard"><h4>${h}</h4><div class="v" ${cls?`style="color:var(--${cls})"`:''}>${v}</div><div class="s">${sub||''}</div></div>`;
+const needSql=(f)=>`<div class="empty" style="padding:14px">Run <b>${f}</b> in Supabase to enable this.</div>`;
+function hbars(rows, fmtv, colour){
+  if(!rows||!rows.length) return '<div class="empty" style="padding:12px">Nothing recorded in this range.</div>';
+  const max=Math.max(...rows.map(r=>+r[1]))||1;
+  return '<div style="display:flex;flex-direction:column;gap:5px">'+rows.map(r=>`
+    <div style="display:flex;align-items:center;gap:10px;font-size:12.5px">
+      <div style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r[0])}">${esc(r[0]||'—')}</div>
+      <div style="width:140px;background:rgba(0,0,0,.06);border-radius:5px;height:10px">
+        <div style="width:${(+r[1]/max*100).toFixed(1)}%;height:100%;background:${colour||'#46B189'};border-radius:5px"></div></div>
+      <div class="mono" style="width:64px;text-align:right;color:var(--muted)">${fmtv?fmtv(r[1]):(+r[1]).toLocaleString()}</div>
+    </div>`).join('')+'</div>';
+}
+
+function renderHealth(){
+  const cur=windowRange();
+  ['synthBox','anomBox','coBox','regBox','errBox','vendBox','catBox','sloBox']
+    .forEach(id=>{const el=document.getElementById(id); if(el) el.innerHTML='<div class="empty" style="padding:10px">Loading…</div>';});
+
+  // ---- anomaly scan: today vs the same weekday, last 4 weeks --------------
+  fetchAnomaly().then(a=>{
+    const el=document.getElementById('anomBox'); if(!el||curView!=='health') return;
+    if(!a){ el.innerHTML=needSql('monitoring_v2.sql'); return; }
+    el.innerHTML='<div class="repgrid">'+(a.metrics||[]).map(m=>{
+      const now=m.cur, base=m.baseline, sd=+m.sd||0;
+      if(now==null||base==null) return hcard(m.name,'—','no baseline yet');
+      const diff=+now-+base, pct=+base?(diff/+base*100):0;
+      // two standard deviations from the same-weekday mean is the alert line
+      const off = sd>0 ? Math.abs(diff)>2*sd : Math.abs(pct)>25;
+      const worse = /LCP|INP/.test(m.name) ? diff>0 : diff<0;
+      return hcard(m.name,(+now).toLocaleString(),
+        `baseline ${(+base).toLocaleString()} · ${diff>0?'+':''}${pct.toFixed(0)}%`
+        + (off?(worse?' — outside normal':' — better than usual'):''),
+        off?(worse?'poor':'good'):'');
+    }).join('')+'</div>';
+  });
+
+  // ---- synthetic purchase path + breakage + vendors + catalog -------------
+  fetchHealth(cur.from,cur.to).then(h=>{
+    if(curView!=='health') return;
+    const sb=document.getElementById('synthBox');
+    if(!h){ sb.innerHTML=needSql('monitoring_v2.sql'); return; }
+
+    const runs=h.synthetic||[];
+    sb.innerHTML = runs.length ? (()=>{
+      const ok=runs.filter(r=>r[0]).length, last=runs[0];
+      return '<div class="repgrid">'
+        + hcard('Last run', last[0]?'passed':'failed', last[0]?new Date(last[3]).toLocaleString():('at step: '+esc(last[1]||'?')), last[0]?'good':'poor')
+        + hcard('Success rate', Math.round(ok/runs.length*100)+'%', ok+'/'+runs.length+' recent runs', ok===runs.length?'good':'warn')
+        + hcard('Journey time', last[2]?(last[2]/1000).toFixed(1)+'s':'—','homepage → checkout hand-off')
+        + '</div><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px">'
+        + runs.slice().reverse().map(r=>`<span title="${new Date(r[3]).toLocaleString()}${r[0]?'':' — failed at '+esc(r[1]||'')}" style="width:15px;height:22px;border-radius:3px;background:${r[0]?'var(--good)':'var(--poor)'}"></span>`).join('')
+        + '</div>';
+    })() : '<div class="empty" style="padding:14px">No synthetic run yet — enable the <b>Synthetic checkout</b> workflow (runs hourly).</div>';
+
+    const eb=document.getElementById('errBox');
+    const kinds=h.errors||[];
+    const KL={js_error:'JS errors',rage_click:'Rage clicks',dead_click:'Dead clicks',rapid_back:'Instant exits'};
+    eb.innerHTML = kinds.length
+      ? '<div class="repgrid">'+kinds.map(k=>hcard(KL[k[0]]||k[0],(+k[1]).toLocaleString(),'in this range',k[0]==='js_error'?'poor':'warn')).join('')+'</div>'
+        + ((h.top_errors||[]).length ? '<div style="font-size:12px;color:var(--muted);margin:12px 0 6px">Most frequent errors</div>'
+             + hbars(h.top_errors.map(e=>[e[0]+'   '+(e[1]||''), e[2]]), null, '#C75C63') : '')
+        + ((h.rage_pages||[]).length ? '<div style="font-size:12px;color:var(--muted);margin:14px 0 6px">Pages people struggle on</div>'
+             + hbars(h.rage_pages, null, '#E0C96A') : '')
+      : '<div class="empty" style="padding:14px">No breakage recorded yet — re-paste <b>webvitals.js</b> to start collecting error and frustration signals.</div>';
+
+    const vb=document.getElementById('vendBox');
+    vb.innerHTML=(h.vendors||[]).length
+      ? hbars(h.vendors.map(v=>[v[0]+'  ·  '+v[1]+' scripts', v[2]||0]), b=>+b?((+b/1024).toFixed(0)+' KB'):'—', '#4FB8A5')
+      : '<div class="empty" style="padding:14px">No vendor scan yet — the scheduled job records this on its next run.</div>';
+
+    const cb=document.getElementById('catBox');
+    const CL={no_image:'No image',out_of_stock:'Fully out of stock',no_price:'No price set',
+              variant_no_image:'Variants missing an image',broken_image:'Broken images'};
+    cb.innerHTML=(h.catalog||[]).length
+      ? '<div class="repgrid">'+h.catalog.map(c=>hcard(CL[c[0]]||c[0],(+c[1]).toLocaleString(),'products affected','warn')).join('')+'</div>'
+      : '<div class="empty" style="padding:14px">No catalog scan yet — the scheduled job walks the full catalog on its next run.</div>';
+  });
+
+  // ---- third-party checkout hand-off --------------------------------------
+  fetchCoHealth(cur.from,cur.to).then(c=>{
+    const el=document.getElementById('coBox'); if(!el||curView!=='health') return;
+    if(!c){ el.innerHTML=needSql('monitoring_v2.sql'); return; }
+    const conv=c.conversion==null?null:+c.conversion*100;
+    el.innerHTML='<div class="repgrid">'
+      + hcard('Checkout clicks',(c.checkout_clicks||0).toLocaleString(),cur.label)
+      + hcard('Became orders',(c.converted||0).toLocaleString(),'within 45 minutes','good')
+      + hcard('Lost after the click',(c.lost||0).toLocaleString(),'clicked, never ordered','poor')
+      + hcard('Hand-off conversion',conv==null?'—':conv.toFixed(1)+'%','of checkout clicks',conv==null?'':(conv>=50?'good':conv>=25?'warn':'poor'))
+      + '</div><div style="font-size:11.5px;color:var(--faint);margin-top:8px">'
+      + 'Checkout runs on a third-party page, so everything after the click happens outside this site. '
+      + 'A low figure here points at the checkout provider rather than your store.</div>';
+  });
+
+  // ---- regression attribution ---------------------------------------------
+  fetchRegress(cur.from,cur.to).then(r=>{
+    const el=document.getElementById('regBox'); if(!el||curView!=='health') return;
+    if(!r){ el.innerHTML=needSql('monitoring_v2.sql'); return; }
+    if(!r.length){ el.innerHTML='<div class="empty" style="padding:14px">No segment got measurably slower than the previous period.</div>'; return; }
+    el.innerHTML='<div class="wv"><table><thead><tr><th>Dimension</th><th>Segment</th><th class="m">Now</th><th class="m">Was</th><th class="m">Change</th><th class="m">Views</th></tr></thead><tbody>'
+      + r.map(x=>{
+          const now=+x[2], was=+x[3], pct=was?((now-was)/was*100):0;
+          return `<tr><td class="pg" style="text-transform:capitalize">${esc(x[0])}</td><td>${esc(x[1]||'—')}</td>`
+            + cellHTML('lcp',now,fmtMs)
+            + `<td class="cell mono" style="color:var(--faint)">${fmtMs(was)}</td>`
+            + `<td class="cell"><span class="cellval poor">+${pct.toFixed(0)}%</span></td>`
+            + `<td class="cell mono">${(+x[4]).toLocaleString()}</td></tr>`;
+        }).join('')+'</tbody></table></div>';
+  });
+
+  // ---- speed SLO + error budget -------------------------------------------
+  fetchSlo(cur.from,cur.to).then(sl=>{
+    const el=document.getElementById('sloBox'); if(!el||curView!=='health') return;
+    if(!sl){ el.innerHTML=needSql('monitoring_v2.sql'); return; }
+    const o=sl.overall||{}, ratio=o.ratio==null?null:+o.ratio*100, target=(+sl.target||.95)*100;
+    let out='<div class="repgrid">'
+      + hcard('Overall',ratio==null?'—':ratio.toFixed(1)+'%',`target ${target}% · ${(o.n||0).toLocaleString()} views`,
+              ratio==null?'':(ratio>=target?'good':'poor'))
+      + hcard('Error budget used',ratio==null?'—':Math.min(100,Math.max(0,(target-ratio)/(100-target)*100)).toFixed(0)+'%','of the failures allowed by the target')
+      + '</div>';
+    const seg=sl.segments||[];
+    if(seg.length){
+      out+='<div style="font-size:12px;color:var(--muted);margin:12px 0 6px">By channel × device — largest audiences first</div>'
+        + '<div class="wv"><table><thead><tr><th>Channel</th><th>Device</th><th class="m">Views</th><th class="m">Fast</th><th class="m">Meets SLO</th></tr></thead><tbody>'
+        + seg.slice(0,12).map(x=>{
+            const pc=+x[4]*100;
+            return `<tr><td class="pg">${esc(x[0])}</td><td>${esc(cap(x[1]))}</td>`
+              + `<td class="cell mono">${(+x[2]).toLocaleString()}</td><td class="cell mono">${(+x[3]).toLocaleString()}</td>`
+              + `<td class="cell"><span class="cellval ${pc>=target?'good':'poor'}">${pc.toFixed(1)}%</span></td></tr>`;
+          }).join('')+'</tbody></table></div>';
+    }
+    el.innerHTML=out;
   });
 }
 

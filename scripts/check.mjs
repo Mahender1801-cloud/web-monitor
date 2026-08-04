@@ -240,6 +240,90 @@ async function pullShopify() {
   } catch (e) { console.error('Shopify pull failed:', e.message); }
 }
 
+// ---- Per-vendor performance budget -----------------------------------------
+// The store loads ~86 scripts, a dozen of them third-party. Tracking that as one
+// number hides which vendor regressed. This attributes weight and render-blocking
+// to each vendor so a bad app update is attributable the day it ships.
+const VENDORS = [
+  [/judge\.?me|jdgm/i, 'Judge.me'], [/gempages/i, 'GemPages'], [/searchanise/i, 'Searchanise'],
+  [/referrush/i, 'ReferRush'], [/ecoreturns/i, 'EcoReturns'], [/instareel/i, 'InstaReel'],
+  [/clarity\.ms/i, 'MS Clarity'], [/googletagmanager|google-analytics|gtag/i, 'Google Tag'],
+  [/facebook|connect\.facebook/i, 'Meta Pixel'], [/shiprocket/i, 'Shiprocket'],
+  [/swym|wishlist/i, 'Wishlist'], [/klaviyo/i, 'Klaviyo'], [/hotjar/i, 'Hotjar'],
+  [/shopify|shopifycdn|myshopify/i, 'Shopify']
+];
+function vendorOf(url) {
+  for (const [re, name] of VENDORS) if (re.test(url)) return name;
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return 'other'; }
+}
+async function scanVendors(url) {
+  try {
+    const { text } = await timedGet(url);
+    const head = (text.match(/<head[^>]*>([\s\S]*?)<\/head>/i) || [, ''])[1];
+    const srcs = [...text.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)].map(m => m[1]);
+    const blocking = new Set([...head.matchAll(/<script\b(?![^>]*\b(async|defer)\b)[^>]*\bsrc=["']([^"']+)["']/gi)].map(m => m[2]));
+    const agg = new Map();
+    for (const raw of srcs) {
+      let abs; try { abs = new URL(raw, url).href; } catch { continue; }
+      const v = vendorOf(abs);
+      const e = agg.get(v) || { vendor: v, host: (() => { try { return new URL(abs).hostname; } catch { return null; } })(),
+                                scripts: 0, bytes: 0, blocking: 0, url };
+      e.scripts++; if (blocking.has(raw)) e.blocking++;
+      agg.set(v, e);
+    }
+    // size the biggest few per vendor so the row means something
+    const list = [...agg.values()];
+    await Promise.all(list.slice(0, 20).map(async e => {
+      const one = srcs.find(x => { try { return vendorOf(new URL(x, url).href) === e.vendor; } catch { return false; } });
+      if (!one) return;
+      try {
+        const r = await fetch(new URL(one, url).href, { method: 'HEAD', headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(8000) });
+        const len = +r.headers.get('content-length'); if (len) e.bytes = len * e.scripts;   // approximation, stated as such
+      } catch {}
+    }));
+    if (list.length) await sbInsert('vendor_perf', list);
+    console.log(`Vendors: ${list.length} tracked (${list.reduce((a, e) => a + e.scripts, 0)} scripts).`);
+  } catch (e) { console.error('Vendor scan failed:', e.message); }
+}
+
+// ---- Whole-catalog integrity ------------------------------------------------
+// The QA probe samples 8 images on one page. This walks the real catalog via
+// products.json and reports every product that is missing an image, has no price,
+// or is out of stock — each of those is a page that cannot convert.
+async function scanCatalog(origin) {
+  try {
+    const issues = [];
+    let page = 1, seen = 0;
+    while (page <= 12) {                       // up to 3000 products
+      const r = await fetch(`${origin}/products.json?limit=250&page=${page}`,
+                            { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(25000) });
+      if (!r.ok) break;
+      const j = await r.json();
+      const items = j.products || [];
+      if (!items.length) break;
+      for (const p of items) {
+        seen++;
+        const url = `${origin}/products/${p.handle}`;
+        if (!p.images || !p.images.length) issues.push({ handle: p.handle, title: p.title, issue: 'no_image', url });
+        const vs = p.variants || [];
+        if (!vs.length || vs.every(v => !+v.price)) issues.push({ handle: p.handle, title: p.title, issue: 'no_price', url });
+        if (vs.length && vs.every(v => v.available === false))
+          issues.push({ handle: p.handle, title: p.title, issue: 'out_of_stock',
+                        detail: `${vs.length} variants, none available`, url });
+        const missingImg = vs.filter(v => v.featured_image === null && (p.images || []).length > 1).length;
+        if (missingImg && vs.length > 1)
+          issues.push({ handle: p.handle, title: p.title, issue: 'variant_no_image',
+                        detail: `${missingImg}/${vs.length} variants without an image`, url });
+      }
+      page++; await sleep(400);
+    }
+    if (issues.length) {
+      for (let i = 0; i < issues.length; i += 400) await sbInsert('catalog_issues', issues.slice(i, i + 400));
+    }
+    console.log(`Catalog: ${seen} products scanned, ${issues.length} issues.`);
+  } catch (e) { console.error('Catalog scan failed:', e.message); }
+}
+
 // ---- PageSpeed Insights ----------------------------------------------------
 async function psi(url, strategy) {
   const api = new URL('https://www.googleapis.com/pagespeedonline/v5/runPagespeed');
@@ -521,6 +605,10 @@ async function runAuto(key, monitor, homepage) {
     });
     console.log(r.ok ? `Rollup refreshed (${await r.text()} days).` : `Rollup refresh: ${r.status} ${(await r.text()).slice(0,150)}`);
   } catch (e) { console.error('Rollup refresh failed:', e.message); }
+
+  // 0d) High-level monitoring: per-vendor budget and whole-catalog integrity
+  await scanVendors(homepage);
+  await scanCatalog(origin(homepage));
 
   // 1) PageSpeed for every monitor, mobile + desktop
   const psiRows = [];

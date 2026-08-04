@@ -174,6 +174,78 @@ addEventListener('click', (e) => {
   } catch {}
 }, { capture: true, passive: true });
 
+// ============================================================================
+// HEALTH SIGNALS — what Web Vitals cannot see.
+//   js_error    a broken script; the page can look fast and still not work
+//   rage_click  same spot clicked 3+ times in 1s — the user tried, nothing happened
+//   dead_click  a click on something that produced no DOM change at all
+//   rapid_back  left within 2s of arriving — usually a broken or wrong page
+// These are leading indicators: they move before conversion does.
+// ============================================================================
+const HEALTH_ENDPOINT = SUPABASE_URL + '/rest/v1/health_events';
+let healthSent = 0;
+function sendHealth(kind, detail, extra) {
+  if (healthSent > 25) return;              // never let a broken page flood the DB
+  healthSent++;
+  try {
+    fetch(HEALTH_ENDPOINT, {
+      method: 'POST', keepalive: true,
+      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY,
+                 'Authorization': 'Bearer ' + SUPABASE_ANON_KEY, 'Prefer': 'return=minimal' },
+      body: JSON.stringify(Object.assign({
+        session_id: sessionId, kind, path: location.pathname,
+        detail: String(detail || '').slice(0, 300),
+        browser, os, device: /Mobi/i.test(ua) ? 'mobile' : 'desktop'
+      }, extra || {}))
+    }).catch(() => {});
+  } catch {}
+}
+
+addEventListener('error', (e) => {
+  // Resource errors (a dead image/script) surface as an event on the element.
+  if (e.target && e.target !== window && (e.target.src || e.target.href)) {
+    sendHealth('js_error', 'failed to load: ' + (e.target.src || e.target.href),
+               { source: (e.target.src || e.target.href || '').slice(0, 300) });
+    return;
+  }
+  sendHealth('js_error', e.message, { source: (e.filename || '').slice(0, 300), line: e.lineno || null });
+}, true);
+addEventListener('unhandledrejection', (e) => {
+  const r = e.reason;
+  sendHealth('js_error', 'unhandled promise: ' + (r && (r.message || r)) );
+});
+
+// rage + dead clicks
+let lastSel = '', lastAt = 0, hits = 0;
+const selOf = el => { try {
+  if (!el || !el.tagName) return '';
+  return el.tagName.toLowerCase()
+    + (el.id ? '#' + el.id : '')
+    + (el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\s+/).slice(0,2).join('.') : '');
+} catch { return ''; } };
+addEventListener('click', (e) => {
+  try {
+    const sel = selOf(e.target), now = Date.now();
+    if (sel && sel === lastSel && now - lastAt < 1000) {
+      if (++hits === 3) sendHealth('rage_click', sel);
+    } else { hits = 1; }
+    lastSel = sel; lastAt = now;
+
+    // dead click: nothing in the DOM changed within 400ms of the click
+    if (!e.target.closest('a,button,input,select,textarea,[role="button"],[onclick]')) return;
+    let changed = false;
+    const mo = new MutationObserver(() => { changed = true; });
+    mo.observe(document.body, { childList: true, subtree: true, attributes: true });
+    setTimeout(() => { mo.disconnect(); if (!changed && location.pathname === (location.pathname))
+      sendHealth('dead_click', sel); }, 400);
+  } catch {}
+}, { capture: true, passive: true });
+
+// rapid back — arrived and left almost immediately
+addEventListener('pagehide', () => {
+  if (timeOnPage() < 2000 && !interacted) sendHealth('rapid_back', 'left in ' + timeOnPage() + 'ms');
+});
+
 function record(metric) {
   const a = metric.attribution || {};
   const e = { value: round(metric.value), rating: metric.rating };

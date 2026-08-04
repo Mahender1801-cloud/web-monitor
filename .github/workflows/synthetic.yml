@@ -1,0 +1,27 @@
+name: Synthetic checkout
+
+# Walks the real purchase path in a real browser. Runs hourly because a broken
+# add-to-cart is a revenue outage — the 5x/day cadence of the main monitor would
+# leave up to ~5 hours of silent breakage.
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+jobs:
+  journey:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Playwright (chromium only)
+        run: npm i -D playwright@1.48.0 && npx playwright install --with-deps chromium
+      - name: Walk the purchase path
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          STORE_URL:            https://hashtageyewears.com
+        run: node scripts/synthetic.mjs
