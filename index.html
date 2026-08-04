@@ -651,6 +651,10 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
         <div id="cmpBox"></div>
         <div class="section-h"><h2>Breakage &amp; frustration</h2><span>JS errors, rage clicks, dead clicks — what Web Vitals cannot see</span></div>
         <div id="errBox"></div>
+        <div class="section-h"><h2>Why these errors happen</h2><span>the script, the line, and what to do about it</span></div>
+        <div id="diagBox"></div>
+        <div class="section-h"><h2>What people are clicking</h2><span>the element they tapped, not just the page</span></div>
+        <div id="strgBox"></div>
         <div class="section-h"><h2>Script audit</h2><span id="scrNote">every script the page actually loads, captured in a real browser</span></div>
         <div id="scrBox"></div>
         <div class="section-h"><h2>Third-party budget</h2><span>per-vendor weight from the initial HTML</span></div>
@@ -1513,6 +1517,8 @@ const fetchRegress  = (f,t) => { const from=Math.max(f, t-2*86400000);   // last
   return cachedRpc('regression_attribution', {p_from:iso(from),p_to:iso(t),p_metric:'lcp'}, 'reg_'+from+'_'+t); };
 const fetchSlo      = (f,t) => cachedRpc('slo_status',             {p_from:iso(f),p_to:iso(t)},                'slo_'+f+'_'+t);
 const fetchCoHealth = (f,t) => cachedRpc('checkout_health',        {p_from:iso(f),p_to:iso(t)},                'coh_'+f+'_'+t);
+const fetchDiag     = (f,t) => cachedRpc('error_diagnosis', {p_from:iso(f),p_to:iso(t)}, 'diag_'+f+'_'+t);
+const fetchStruggle = (f,t) => cachedRpc('struggle_detail', {p_from:iso(f),p_to:iso(t)}, 'strg_'+f+'_'+t);
 const fetchScripts  = ()    => cachedRpc('script_report',  {},                         'scr_'+new Date().toDateString());
 const fetchHCompare = (f,t) => cachedRpc('health_compare', {p_from:iso(f),p_to:iso(t)}, 'hcmp_'+f+'_'+t);
 const fetchHealth   = (f,t) => cachedRpc('health_summary',         {p_from:iso(f),p_to:iso(t)},                'hs_'+f+'_'+t);
@@ -1529,6 +1535,106 @@ function hbars(rows, fmtv, colour){
         <div style="width:${(+r[1]/max*100).toFixed(1)}%;height:100%;background:${colour||'#46B189'};border-radius:5px"></div></div>
       <div class="mono" style="width:64px;text-align:right;color:var(--muted)">${fmtv?fmtv(r[1]):(+r[1]).toLocaleString()}</div>
     </div>`).join('')+'</div>';
+}
+
+// Plain-language reading of an error signature: what it means, and what to do.
+// Ordered — first match wins — because the specific patterns must beat the generic
+// "Script error." catch-all.
+const ERROR_MEANING = [
+  [/_AutofillCallbackHandler/i, {
+    what: 'Not your bug. This comes from the in-app browser inside Instagram/Facebook, which injects its own autofill helper.',
+    why:  'Meta is the biggest source of this traffic, so most sessions open in that in-app browser.',
+    fix:  'Safe to ignore. Do not spend time chasing it.', sev:'ok' }],
+  [/failed to load:/i, {
+    what: 'A file the page asked for never arrived — it 404s, is blocked, or the vendor is down.',
+    why:  'Usually an app whose CDN is failing, or a script blocked by the browser for cross-origin reasons.',
+    fix:  'Open the URL directly. If it fails for you too, it is the vendor — reinstall or remove that app.', sev:'poor' }],
+  [/Cannot read properties of null|Cannot read property .* of null|of null \(reading/i, {
+    what: 'A script tried to use an element that was not on the page at that moment.',
+    why:  'Classic after a theme edit: the element was renamed or removed, or the script runs before it renders.',
+    fix:  'Check the script and line shown — if it is your own theme file, that line needs a null guard.', sev:'poor' }],
+  [/Can't find variable|is not defined|is not a function/i, {
+    what: 'A script referenced something that does not exist at that point.',
+    why:  'Usually load order — the script ran before the library it depends on, or that library failed to load.',
+    fix:  'Check whether the dependency above it in the audit is failing.', sev:'poor' }],
+  [/unhandled promise: (Failed to fetch|Load failed|NetworkError)/i, {
+    what: 'A background network request failed and nothing handled the failure.',
+    why:  'A third-party endpoint timed out or was blocked, or the shopper lost connection mid-request.',
+    fix:  'Cross-check the failing resources in the Script audit — the same host usually appears there.', sev:'warn' }],
+  [/^Script error\.?$/i, {
+    what: 'A third-party script threw, and the browser is withholding the details.',
+    why:  'Browsers hide messages from cross-origin scripts unless the vendor serves CORS headers — so the message is blank by design, not missing.',
+    fix:  'Identify it from the Script audit: the vendor that is failing there is almost always this.', sev:'warn' }]
+];
+function explainError(msg){
+  for(const [re,info] of ERROR_MEANING) if(re.test(msg||'')) return info;
+  return { what:'Uncategorised JavaScript error.', why:'', fix:'Use the script and line to trace it.', sev:'warn' };
+}
+// What a clicked element most likely is, from its selector.
+const ELEMENT_MEANING = [
+  [/atc|add-to-cart|addtocart/i, 'the Add to Cart control'],
+  [/swatch|variant|option/i,     'a variant / colour swatch'],
+  [/size-guide|sizeguide/i,      'the size-guide link'],
+  [/menu|nav/i,                  'a menu item'],
+  [/close|dismiss/i,             'a close button'],
+  [/cart/i,                      'a cart control'],
+  [/checkout|buy/i,              'a checkout control'],
+  [/^svg$|icon/i,                'an icon (often the icon inside a button, not the button itself)'],
+  [/search/i,                    'the search control'],
+  [/img|image|slide|carousel/i,  'a product image / slider']
+];
+const describeElement = sel => { for(const [re,t] of ELEMENT_MEANING) if(re.test(sel||'')) return t; return 'this element'; };
+
+function paintDiagnosis(rows){
+  const el=document.getElementById('diagBox'); if(!el) return;
+  if(!rows){ el.innerHTML='<div class="empty" style="padding:10px">Loading…</div>'; return; }
+  if(!rows.length){ el.innerHTML=needSql('error_diagnosis.sql'); return; }
+  el.innerHTML = rows.slice(0,10).map(r=>{
+    const [msg,src,line,n,pages,br,dev,safari,chrome,first,last,sample]=r;
+    const info=explainError(msg);
+    const host=(()=>{ try{ return src? new URL(src).host : ''; }catch{ return (src||'').slice(0,50); } })();
+    const mine=/hashtageyewear|cdn\/shop\/t\//i.test(src||'');
+    const skew = (safari>chrome*2 && safari>5) ? 'mostly Safari' : (chrome>safari*2 && chrome>5) ? 'mostly Chrome' : 'across browsers';
+    return `<div class="repcard" style="margin-bottom:10px">
+      <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap">
+        <span class="cellval ${info.sev}" style="flex-shrink:0">${n.toLocaleString()}×</span>
+        <div style="flex:1;min-width:220px">
+          <div class="mono" style="font-size:12.5px;color:var(--ink);word-break:break-word">${esc(String(msg).slice(0,140))}</div>
+          <div style="font-size:11.5px;color:var(--faint);margin-top:3px">
+            ${host ? ('<b>'+esc(host)+'</b>' + (line ? (' · line '+line) : '') + ' · ') : ''}${pages} page${pages===1?'':'s'} · ${skew} · ${esc(dev||'')}
+            ${mine?' · <span style="color:var(--poor)">your own theme</span>':''}
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:9px;font-size:12.5px;line-height:1.6">
+        <div><b>What it is:</b> ${esc(info.what)}</div>
+        ${info.why?`<div style="color:var(--muted)"><b>Why it happens:</b> ${esc(info.why)}</div>`:''}
+        <div style="color:var(--muted)"><b>What to do:</b> ${esc(info.fix)}</div>
+        ${sample?`<div style="color:var(--faint);font-size:11.5px;margin-top:4px">seen on ${esc(String(sample).slice(0,80))} · last ${new Date(last).toLocaleString()}</div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function paintStruggle(d){
+  const el=document.getElementById('strgBox'); if(!el) return;
+  if(!d){ el.innerHTML='<div class="empty" style="padding:10px">Loading…</div>'; return; }
+  const rows=(d.by_element||[]);
+  if(!rows.length){ el.innerHTML=needSql('error_diagnosis.sql'); return; }
+  el.innerHTML='<div class="wv"><table><thead><tr><th>Element clicked</th><th>What it is</th><th class="m">Times</th><th class="m">Kind</th><th class="m">Browser</th><th>Page</th></tr></thead><tbody>'
+    + rows.slice(0,14).map(r=>{
+        const [elem,kind,n,pages,br,dev,sample]=r;
+        return '<tr><td class="mono" style="font-size:12px">'+esc(elem)+'</td>'
+          +'<td style="font-size:12px;color:var(--muted)">'+esc(describeElement(elem))+'</td>'
+          +'<td class="cell mono">'+n+'</td>'
+          +'<td class="cell"><span class="cellval '+(kind==='rage_click'?'poor':'warn')+'">'+(kind==='rage_click'?'rage':'dead')+'</span></td>'
+          +'<td class="cell">'+esc(br||'')+'</td>'
+          +'<td style="font-size:11.5px;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(sample||'')+'">'+esc(sample||'')+'</td></tr>';
+      }).join('')
+    + '</tbody></table></div>'
+    + '<div style="font-size:11.5px;color:var(--faint);margin-top:8px">'
+    + '<b>Dead click</b> = they clicked and nothing on the page changed. <b>Rage click</b> = they clicked the same spot 3+ times in a second. '
+    + 'An icon or a label showing up here usually means the click target is the wrapper, not the child — the tap lands but does nothing.</div>';
 }
 
 function renderHealth(){
@@ -1595,6 +1701,12 @@ function renderHealth(){
       ? '<div class="repgrid">'+h.catalog.map(c=>hcard(CL[c[0]]||c[0],(+c[1]).toLocaleString(),'products affected','warn')).join('')+'</div>'
       : '<div class="empty" style="padding:14px">No catalog scan yet — the scheduled job walks the full catalog on its next run.</div>';
   });
+
+  // ---- why the errors happen ---------------------------------------------
+  paintDiagnosis(null);
+  fetchDiag(cur.from,cur.to).then(r=>{ if(curView==='health') paintDiagnosis(r||[]); });
+  paintStruggle(null);
+  fetchStruggle(cur.from,cur.to).then(r=>{ if(curView==='health') paintStruggle(r); });
 
   // ---- full script audit (real browser, so runtime-injected scripts count) --
   fetchScripts().then(sr=>{
