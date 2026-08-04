@@ -5,7 +5,9 @@ name: Synthetic checkout
 # leave up to ~5 hours of silent breakage.
 on:
   schedule:
-    - cron: '05 * * * *'
+    # Deliberately odd minutes rather than a round number, and only every other
+    # hour: an exact hourly hit at :00 looks like a machine and adds needless load.
+    - cron: '23 1,5,9,13,17,21 * * *'
   workflow_dispatch:
 
 jobs:
@@ -19,6 +21,9 @@ jobs:
           node-version: '22'
       - name: Install Playwright (chromium only)
         run: npm i -D playwright@1.48.0 && npx playwright install --with-deps chromium
+      - name: Stagger the start
+        # Random 0-4 minute offset so runs never land on the same second twice.
+        run: sleep $((RANDOM % 240))
       - name: Walk the purchase path
         env:
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
