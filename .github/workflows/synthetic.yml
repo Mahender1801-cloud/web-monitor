@@ -5,7 +5,7 @@ name: Synthetic checkout
 # leave up to ~5 hours of silent breakage.
 on:
   schedule:
-    - cron: '17 * * * *'
+    - cron: '05 * * * *'
   workflow_dispatch:
 
 jobs:

@@ -53,8 +53,10 @@ const run = async () => {
   page.setDefaultTimeout(30000);
 
   await step('homepage', async () => {
-    const r = await page.goto(STORE + '/', { waitUntil: 'domcontentloaded' });
-    if (!r || r.status() >= 400) throw new Error('HTTP ' + (r && r.status()));
+    // Shopify/Cloudflare bot protection returns 429 to datacentre IPs, and GitHub
+    // runners are datacentre IPs. A 429 here is the CDN turning us away, not the
+    // store being down — so back off and retry before calling it a failure.
+    const r = await gotoWithRetry(page, STORE + '/');
     await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
     return 'HTTP ' + r.status();
   });
@@ -73,8 +75,7 @@ const run = async () => {
   });
 
   await step('open product page', async () => {
-    const r = await page.goto(productUrl, { waitUntil: 'domcontentloaded' });
-    if (!r || r.status() >= 400) throw new Error('HTTP ' + (r && r.status()));
+    const r = await gotoWithRetry(page, productUrl);
     await page.waitForSelector('form[action*="/cart/add"], button[name="add"], [data-add-to-cart]', { timeout: 20000 });
     return 'HTTP ' + r.status();
   });
@@ -93,8 +94,7 @@ const run = async () => {
   });
 
   await step('cart page', async () => {
-    const r = await page.goto(STORE + '/cart', { waitUntil: 'domcontentloaded' });
-    if (!r || r.status() >= 400) throw new Error('HTTP ' + (r && r.status()));
+    const r = await gotoWithRetry(page, STORE + '/cart');
     const n = await cartCount(page);
     if (!n) throw new Error('cart is empty on /cart');
     return n + ' item(s)';
@@ -117,6 +117,19 @@ const run = async () => {
 
   await browser.close();
 };
+
+// Retry navigation on the CDN's throttle/blocking responses with growing backoff.
+async function gotoWithRetry(page, url, tries = 4) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    const r = await page.goto(url, { waitUntil: 'domcontentloaded' }).catch(e => { last = e; return null; });
+    if (r && r.status() < 400) return r;
+    last = r ? new Error('HTTP ' + r.status()) : last;
+    if (r && ![429, 403, 503].includes(r.status())) break;   // a real error, not throttling
+    await page.waitForTimeout(4000 * (i + 1));
+  }
+  throw last || new Error('navigation failed');
+}
 
 async function cartCount(page) {
   try {
