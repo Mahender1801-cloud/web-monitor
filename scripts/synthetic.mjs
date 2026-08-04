@@ -228,8 +228,7 @@ const run = async () => {
     if (!btn) throw new Error('no visible checkout control on /cart');
     await Promise.all([
       page.waitForURL(/checkout|shiprocket|gokwik|razorpay|payment|snapmint/i, { timeout: 35000 }).catch(() => {}),
-      humanClick(page, btn).catch(e => { throw new Error('checkout click failed: ' + e.message.split('
-')[0]); })
+      humanClick(page, btn).catch(e => { throw new Error('checkout click failed: ' + String(e.message).slice(0, 120)); })
     ]);
     await page.waitForTimeout(3000);
     const u = page.url();
