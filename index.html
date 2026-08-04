@@ -630,6 +630,7 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
           <thead><tr><th>Last seen</th><th>Entry page</th><th>Source</th><th class="m">Pages</th><th class="m">Engaged</th><th class="m">Device</th><th>Journey</th></tr></thead>
           <tbody id="visBody"><tr><td colspan=7 class="empty">Loading visitors…</td></tr></tbody>
         </table></div>
+        <div id="visPager" style="display:flex;gap:10px;align-items:center;justify-content:center;margin-top:12px"></div>
         <p style="color:var(--faint);font-size:11.5px;margin-top:12px">
           Visitors with a Google-cookie id show their <b>full multi-page journey</b>; others (cookies declined) show a single visit.
           Data goes back to <b>10 July</b> — the whole history we’ve collected. No names or emails are stored.
@@ -1410,36 +1411,49 @@ function paintVisitorReport(d){
     <div>${depth}${list('Where they leave',d.top_exit)}</div></div>`;
 }
 
-function renderVisitors(){
+const VIS_PAGE=200;              // rows per page — the window can hold 40k+ visitors
+let visOffset=0;
+function visPage(delta){
+  visOffset=Math.max(0, visOffset + delta*VIS_PAGE);
+  renderVisitors(true);
+}
+function renderVisitors(keepOffset){
+  if(!keepOffset) visOffset=0;
   const cur=windowRange();
   const tiles=document.getElementById('visTiles'), body=document.getElementById('visBody');
   paintSources(null); fetchSources(cur.from,cur.to).then(r=>{ if(curView==='visitors') paintSources(r||[]); });
-  paintVisitorReport(null); fetchVisReport(cur.from,cur.to).then(r=>{ if(curView==='visitors') paintVisitorReport(r); });
-  const paintT=(rows)=>{
-    if(!rows){ tiles.innerHTML=''; return; }
-    const total=rows.length, withGa=rows.filter(r=>r[1]==='ga').length;
-    const multi=rows.filter(r=>r[2]>1).length, totEng=rows.reduce((a,r)=>a+(+r[3]||0),0);
-    tiles.innerHTML=[
-      ['Visitors', total.toLocaleString(), cur.label+' · top 150'],
-      ['Multi-page', multi.toLocaleString(), 'saw more than one page'],
-      ['Identified', withGa.toLocaleString(), 'have a journey link'],
-      ['Avg engaged', total?((totEng/total)/1000).toFixed(1)+'s':'—', 'per visitor'],
-    ].map(([h,v,sub])=>`<div class="card"><h3>${h}</h3><div class="metric" style="color:var(--ink)">${v}</div><div class="metric-sub">${sub}</div></div>`).join('');
-  };
-  paintT(null);
-  body.innerHTML='<tr><td colspan=7 class="empty">Loading visitors…</td></tr>';
-  fetchVisitors(cur.from,cur.to).then(rows=>{
+  paintVisitorReport(null);
+  // The tiles read the REAL totals for the window (visitor_report), not the page
+  // of rows below — previously they were computed from the 150 fetched rows, so
+  // the page showed "Visitors 150" above and "42,857" further down.
+  fetchVisReport(cur.from,cur.to).then(r=>{
     if(curView!=='visitors') return;
-    rows=rows||[];
-    paintT(rows);
-    if(!rows.length){ body.innerHTML='<tr><td colspan=7 class="empty">No visitor data in this range.</td></tr>'; return; }
-    body.innerHTML=rows.slice(0,150).map(r=>{
+    paintVisitorReport(r);
+    const d=r||{}, v=d.visitors||0;
+    const pct=n=>v?((n/v*100).toFixed(1)+'%'):'—';
+    tiles.innerHTML=[
+      ['Visitors',(v).toLocaleString(), cur.label+' · '+(d.views||0).toLocaleString()+' page views'],
+      ['Multi-page',(d.multipage||0).toLocaleString(), pct(d.multipage)+' saw more than one page'],
+      ['Identified',(d.identified||0).toLocaleString(), pct(d.identified)+' have a journey link'],
+      ['Avg engaged',(d.engaged_avg??'—')+'s','per visitor'],
+    ].map(([h,val,sub])=>`<div class="card"><h3>${h}</h3><div class="metric" style="color:var(--ink)">${val}</div><div class="metric-sub">${sub}</div></div>`).join('');
+  });
+  body.innerHTML='<tr><td colspan=7 class="empty">Loading visitors…</td></tr>';
+  fetchVisitors(cur.from,cur.to,visOffset).then(res=>{
+    if(curView!=='visitors') return;
+    // tolerate the old shape (a bare array) until visitors_paged.sql is applied
+    const paged=res && !Array.isArray(res);
+    const rows=paged?(res.rows||[]):(res||[]);
+    const total=paged?(res.total||rows.length):rows.length;
+    if(!rows.length){ body.innerHTML='<tr><td colspan=7 class="empty">No visitor data in this range.</td></tr>';
+      document.getElementById('visNote').textContent='No visitors in this range'; return; }
+    body.innerHTML=rows.map(r=>{
       const [k,by,pages,engaged,,last,device,referrer,entry]=r;
-      const key=String(k).replace(/['\\]/g,'');
+      const key=escq(k);
       const jb=`<button class="raw-btn" onclick="showJourney('${key}','','${by==='ga'?'ga_client_id':'session_id'}')">${pages>1?('view '+pages+' pages →'):'view →'}</button>`;
       return `<tr>
         <td class="mono" style="color:var(--faint)">${new Date(last).toLocaleString()}</td>
-        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${entry||''}">${entry||'/'}</td>
+        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(entry||'')}">${esc(entry||'/')}</td>
         <td style="font-size:12px">${refShort(referrer)}</td>
         <td class="cell mono">${pages}</td>
         <td class="cell mono">${engaged?(engaged/1000).toFixed(0)+'s':'—'}</td>
@@ -1447,7 +1461,16 @@ function renderVisitors(){
         <td style="font-size:12px">${jb}</td>
       </tr>`;
     }).join('');
-    document.getElementById('visNote').textContent=`${rows.length} recent visitors · ${rows.filter(r=>r[1]==='ga').length} with a full multi-page journey`;
+    const from=visOffset+1, to=visOffset+rows.length, pages=Math.ceil(total/VIS_PAGE)||1;
+    const cpage=Math.floor(visOffset/VIS_PAGE)+1;
+    document.getElementById('visNote').innerHTML =
+      `showing <b>${from.toLocaleString()}–${to.toLocaleString()}</b> of <b>${total.toLocaleString()}</b> visitors`
+      + (paged ? ` · page ${cpage} of ${pages.toLocaleString()}` : ' · run visitors_paged.sql to page through all of them');
+    const pg=document.getElementById('visPager');
+    if(pg) pg.innerHTML = paged && total>VIS_PAGE
+      ? `<button class="btn" ${visOffset<=0?'disabled':''} onclick="visPage(-1)">← Newer</button>
+         <span style="font-size:12px;color:var(--muted)">page ${cpage} / ${pages.toLocaleString()}</span>
+         <button class="btn" ${to>=total?'disabled':''} onclick="visPage(1)">Older →</button>` : '';
   });
 }
 
@@ -1701,7 +1724,7 @@ const fetchPages     =(f,t)=>cachedRpc('dash_pages',     {p_from:iso(f),p_to:iso
 const fetchPageDaily =(f,t)=>cachedRpc('dash_page_daily',{p_from:iso(f),p_to:iso(t),p_limit:25}, 'pgd_'+f+'_'+t);
 const fetchShopStats =(f,t)=>cachedRpc('shop_stats',     {p_from:iso(f),p_to:iso(t)},            'shop_'+f+'_'+t);
 const fetchFunnel    =(f,t)=>cachedRpc('funnel_stats',   {p_from:iso(f),p_to:iso(t)},            'fun_'+f+'_'+t);
-const fetchVisitors  =(f,t)=>cachedRpc('recent_visitors',{p_from:iso(f),p_to:iso(t),p_limit:150},'vis_'+f+'_'+t);
+const fetchVisitors  =(f,t,off)=>cachedRpc('recent_visitors',{p_from:iso(f),p_to:iso(t),p_limit:VIS_PAGE,p_offset:off||0},'vis_'+f+'_'+t+'_'+(off||0));
 const fetchSources   =(f,t)=>cachedRpc('traffic_sources', {p_from:iso(f),p_to:iso(t)},            'src_'+f+'_'+t);
 const fetchVisReport =(f,t)=>cachedRpc('visitor_report',  {p_from:iso(f),p_to:iso(t)},            'vrp_'+f+'_'+t);
 async function refreshStats(from,to,k){
