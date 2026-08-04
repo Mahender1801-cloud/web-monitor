@@ -647,9 +647,13 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
         <div id="coBox"></div>
         <div class="section-h"><h2>What regressed</h2><span>last 48h vs the 48h before · which segment moved, not just the average</span></div>
         <div id="regBox"></div>
+        <div class="section-h"><h2>This period vs the one before</h2><span>are things getting better or worse</span></div>
+        <div id="cmpBox"></div>
         <div class="section-h"><h2>Breakage &amp; frustration</h2><span>JS errors, rage clicks, dead clicks — what Web Vitals cannot see</span></div>
         <div id="errBox"></div>
-        <div class="section-h"><h2>Third-party budget</h2><span>per-vendor script weight</span></div>
+        <div class="section-h"><h2>Script audit</h2><span id="scrNote">every script the page actually loads, captured in a real browser</span></div>
+        <div id="scrBox"></div>
+        <div class="section-h"><h2>Third-party budget</h2><span>per-vendor weight from the initial HTML</span></div>
         <div id="vendBox"></div>
         <div class="section-h"><h2>Catalog integrity</h2><span>whole catalog, not a sample</span></div>
         <div id="catBox"></div>
@@ -1509,6 +1513,8 @@ const fetchRegress  = (f,t) => { const from=Math.max(f, t-2*86400000);   // last
   return cachedRpc('regression_attribution', {p_from:iso(from),p_to:iso(t),p_metric:'lcp'}, 'reg_'+from+'_'+t); };
 const fetchSlo      = (f,t) => cachedRpc('slo_status',             {p_from:iso(f),p_to:iso(t)},                'slo_'+f+'_'+t);
 const fetchCoHealth = (f,t) => cachedRpc('checkout_health',        {p_from:iso(f),p_to:iso(t)},                'coh_'+f+'_'+t);
+const fetchScripts  = ()    => cachedRpc('script_report',  {},                         'scr_'+new Date().toDateString());
+const fetchHCompare = (f,t) => cachedRpc('health_compare', {p_from:iso(f),p_to:iso(t)}, 'hcmp_'+f+'_'+t);
 const fetchHealth   = (f,t) => cachedRpc('health_summary',         {p_from:iso(f),p_to:iso(t)},                'hs_'+f+'_'+t);
 
 const hcard=(h,v,sub,cls)=>`<div class="repcard"><h4>${h}</h4><div class="v" ${cls?`style="color:var(--${cls})"`:''}>${v}</div><div class="s">${sub||''}</div></div>`;
@@ -1590,19 +1596,87 @@ function renderHealth(){
       : '<div class="empty" style="padding:14px">No catalog scan yet — the scheduled job walks the full catalog on its next run.</div>';
   });
 
+  // ---- full script audit (real browser, so runtime-injected scripts count) --
+  fetchScripts().then(sr=>{
+    const el=document.getElementById('scrBox'); if(!el||curView!=='health') return;
+    if(!sr||!sr.resources){ el.innerHTML='<div class="empty" style="padding:14px">No audit yet — run <b>script_audit.sql</b>, then the <b>Synthetic checkout</b> workflow.</div>'; return; }
+    const note=document.getElementById('scrNote');
+    if(note) note.textContent = sr.resources+' resources · '+((sr.bytes||0)/1048576).toFixed(2)+' MB · captured '+new Date(sr.run_at).toLocaleString();
+    let h='<div class="repgrid">'
+      + hcard('Resources',(sr.resources||0).toLocaleString(),'scripts, xhr and css actually loaded')
+      + hcard('Total weight',(((sr.bytes||0)/1048576).toFixed(2))+' MB','transferred')
+      + hcard('Failing',(sr.failing||0).toLocaleString(),'did not load',sr.failing?'poor':'good')
+      + hcard('Vendors',(sr.vendors||[]).length,'distinct sources')
+      + '</div>';
+    if((sr.broken||[]).length){
+      h+='<div style="font-size:12px;color:var(--muted);margin:12px 0 6px">Not loading — broken right now</div>'
+       + '<div class="wv"><table><thead><tr><th>Resource</th><th>Vendor</th><th class="m">Status</th><th>Error</th></tr></thead><tbody>'
+       + sr.broken.map(b=>'<tr><td style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(b[0])+'">'+esc(b[0])+'</td>'
+           +'<td>'+esc(b[1]||'')+'</td><td class="cell"><span class="cellval poor">'+(b[2]||'—')+'</span></td>'
+           +'<td style="font-size:11.5px;color:var(--muted)">'+esc(b[3]||'')+'</td></tr>').join('')
+       + '</tbody></table></div>';
+    }
+    if((sr.vendors||[]).length){
+      h+='<div style="font-size:12px;color:var(--muted);margin:14px 0 6px">Weight by vendor</div>'
+       + '<div class="wv"><table><thead><tr><th>Vendor</th><th class="m">Resources</th><th class="m">Weight</th><th class="m">Slowest</th><th class="m">Failing</th></tr></thead><tbody>'
+       + sr.vendors.map(v=>'<tr><td class="pg">'+esc(v[0])+'</td><td class="cell mono">'+v[1]+'</td>'
+           +'<td class="cell mono">'+(((v[2]||0)/1024).toFixed(0))+' KB</td>'
+           +'<td class="cell mono">'+(v[3]?v[3]+'ms':'—')+'</td>'
+           +'<td class="cell">'+(v[4]?'<span class="cellval poor">'+v[4]+'</span>':'<span style="color:var(--faint)">0</span>')+'</td></tr>').join('')
+       + '</tbody></table></div>';
+    }
+    if((sr.slowest||[]).length){
+      h+='<div style="font-size:12px;color:var(--muted);margin:14px 0 6px">Slowest to load</div>'
+       + hbars(sr.slowest.slice(0,10).map(function(x){
+           return [(x[1]?x[1]+' · ':'')+String(x[0]).replace(/^https?:\/\//,'').slice(0,70), x[2]];
+         }), function(v){ return v+'ms'; }, '#E2A25C');
+    }
+    el.innerHTML=h;
+  });
+
+  // ---- this period vs the previous one ------------------------------------
+  fetchHCompare(cur.from,cur.to).then(hc=>{
+    const el=document.getElementById('cmpBox'); if(!el||curView!=='health') return;
+    if(!hc||!hc.kinds){ el.innerHTML=needSql('script_audit.sql'); return; }
+    const KL={js_error:'JS errors',rage_click:'Rage clicks',dead_click:'Dead clicks',rapid_back:'Instant exits'};
+    const row=(label,now,prev,lowerBetter)=>{
+      const d=(+now)-(+prev), pct=(+prev)?((d/(+prev))*100):null;
+      const better = lowerBetter ? d<0 : d>0;
+      return '<tr><td class="pg">'+esc(label)+'</td><td class="cell mono">'+(+now).toLocaleString()+'</td>'
+        +'<td class="cell mono" style="color:var(--faint)">'+(+prev).toLocaleString()+'</td>'
+        +'<td class="cell">'+(pct===null?'—':'<span class="cellval '+(d===0?'na':better?'good':'poor')+'">'+(d>0?'+':'')+pct.toFixed(0)+'%</span>')+'</td></tr>';
+    };
+    let h='<div class="wv"><table><thead><tr><th>Signal</th><th class="m">This period</th><th class="m">Previous</th><th class="m">Change</th></tr></thead><tbody>';
+    (hc.kinds||[]).forEach(k=>{ h+=row(KL[k[0]]||k[0],k[1],k[2],true); });
+    const co=hc.checkout||{};
+    if(co.now&&co.prev){
+      h+=row('Shoppers who clicked checkout',co.now.sessions||0,co.prev.sessions||0,false);
+      h+=row('Reached an order',co.now.converted||0,co.prev.converted||0,false);
+      h+=row('Lost after clicking',co.now.lost||0,co.prev.lost||0,true);
+    }
+    const sy=hc.synthetic||{};
+    if(sy.now_n) h+=row('Purchase-path passes',sy.now_ok||0,sy.prev_ok||0,false);
+    h+='</tbody></table></div>';
+    el.innerHTML=h;
+  });
+
   // ---- third-party checkout hand-off --------------------------------------
   fetchCoHealth(cur.from,cur.to).then(c=>{
     const el=document.getElementById('coBox'); if(!el||curView!=='health') return;
     if(!c){ el.innerHTML=needSql('monitoring_v2.sql'); return; }
     const conv=c.conversion==null?null:+c.conversion*100;
+    // Counted per SESSION, not per click. Counting taps previously reported more
+    // conversions than there were orders in the window, which cannot be true.
     el.innerHTML='<div class="repgrid">'
-      + hcard('Checkout clicks',(c.checkout_clicks||0).toLocaleString(),cur.label)
-      + hcard('Became orders',(c.converted||0).toLocaleString(),'within 45 minutes','good')
-      + hcard('Lost after the click',(c.lost||0).toLocaleString(),'clicked, never ordered','poor')
-      + hcard('Hand-off conversion',conv==null?'—':conv.toFixed(1)+'%','of checkout clicks',conv==null?'':(conv>=50?'good':conv>=25?'warn':'poor'))
+      + hcard('Shoppers who clicked',(c.sessions||0).toLocaleString(),
+              (c.click_events||0).toLocaleString()+' taps'+(c.repeat_clicks?(' · '+c.repeat_clicks+' tried more than once'):''))
+      + hcard('Reached an order',(c.converted||0).toLocaleString(),
+              'of '+(c.orders_window||0).toLocaleString()+' orders in this range','good')
+      + hcard('Lost after clicking',(c.lost||0).toLocaleString(),'clicked, no order followed','poor')
+      + hcard('Hand-off conversion',conv==null?'—':conv.toFixed(1)+'%','of shoppers who clicked',conv==null?'':(conv>=50?'good':conv>=25?'warn':'poor'))
       + '</div><div style="font-size:11.5px;color:var(--faint);margin-top:8px">'
       + 'Checkout runs on a third-party page, so everything after the click happens outside this site. '
-      + 'A low figure here points at the checkout provider rather than your store.</div>';
+      + 'Orders are matched to a session partly BY that click, so read the conversion figure as a floor, not a ceiling.</div>';
   });
 
   // ---- regression attribution ---------------------------------------------

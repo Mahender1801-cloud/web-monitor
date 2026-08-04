@@ -21,6 +21,7 @@ const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY;
 const STORE        = (process.env.STORE_URL || 'https://hashtageyewears.com').replace(/\/$/, '');
 
 const steps = [];
+const AUDIT = { scripts: [], errors: [] };
 let failed = null;
 const t0 = Date.now();
 
@@ -51,6 +52,39 @@ const run = async () => {
   });
   const page = await ctx.newPage();
   page.setDefaultTimeout(30000);
+
+  // FULL SCRIPT AUDIT. The server-side scan only sees <script src> in the initial
+  // HTML, which is why most Shopify apps were missing — they inject themselves at
+  // runtime. Watching the network from inside a real browser catches every script,
+  // however it got there, with its real transfer size, timing and failures.
+  const netAll = new Map();          // url -> record
+  const consoleErrs = [];
+  page.on('response', async (res) => {
+    try {
+      const req = res.request();
+      const type = req.resourceType();
+      if (!['script','xhr','fetch','stylesheet'].includes(type)) return;
+      const url = res.url().split('?')[0];
+      const rec = netAll.get(url) || { url, type, hits: 0, bytes: 0, ms: 0, status: 0, failed: 0 };
+      rec.hits++; rec.status = res.status();
+      if (res.status() >= 400) rec.failed++;
+      const t = req.timing();
+      if (t && t.responseEnd > 0) rec.ms = Math.max(rec.ms, Math.round(t.responseEnd - t.startTime));
+      const len = +((await res.headerValue('content-length')) || 0);
+      if (len) rec.bytes = Math.max(rec.bytes, len);
+      netAll.set(url, rec);
+    } catch {}
+  });
+  page.on('requestfailed', (req) => {
+    try {
+      const url = req.url().split('?')[0];
+      const rec = netAll.get(url) || { url, type: req.resourceType(), hits: 0, bytes: 0, ms: 0, status: 0, failed: 0 };
+      rec.failed++; rec.error = (req.failure() && req.failure().errorText || '').slice(0, 120);
+      netAll.set(url, rec);
+    } catch {}
+  });
+  page.on('pageerror', (e) => { consoleErrs.push({ kind: 'pageerror', text: String(e.message).slice(0, 300) }); });
+  page.on('console', (m) => { if (m.type() === 'error') consoleErrs.push({ kind: 'console', text: m.text().slice(0, 300) }); });
 
   await step('homepage', async () => {
     // Shopify/Cloudflare bot protection returns 429 to datacentre IPs, and GitHub
@@ -127,8 +161,24 @@ const run = async () => {
     return new URL(u).host;
   });
 
+  AUDIT.scripts = [...netAll.values()];
+  AUDIT.errors  = consoleErrs;
   await browser.close();
 };
+
+// Shared with the report so a vendor is named the same way everywhere.
+const VENDOR_RULES = [
+  [/judge\.?me|jdgm/i,'Judge.me'], [/gempages/i,'GemPages'], [/searchanise/i,'Searchanise'],
+  [/referrush/i,'ReferRush'], [/ecoreturns/i,'EcoReturns'], [/instareel/i,'InstaReel'],
+  [/clarity\.ms/i,'MS Clarity'], [/googletagmanager|google-analytics|gtag|doubleclick/i,'Google'],
+  [/facebook|fbcdn/i,'Meta'], [/shiprocket/i,'Shiprocket'], [/snapmint/i,'Snapmint'],
+  [/thimatic|wishlist|swym/i,'Wishlist'], [/klaviyo/i,'Klaviyo'], [/hotjar/i,'Hotjar'],
+  [/webengage|moengage|clevertap/i,'Engagement'], [/razorpay|payu|cashfree/i,'Payments'],
+  [/cdn\.shopify|shopifycloud|myshopify|shopifysvc/i,'Shopify'],
+  [/tiktok/i,'TikTok'], [/pinterest/i,'Pinterest'], [/hashtageyewear/i,'Own theme']
+];
+function vendorOf(u){ for(const [re,n] of VENDOR_RULES) if(re.test(u)) return n;
+  try { return new URL(u).hostname.replace(/^www\./,''); } catch { return 'other'; } }
 
 // Retry navigation on the CDN's throttle/blocking responses with growing backoff.
 async function gotoWithRetry(page, url, tries = 4) {
@@ -174,6 +224,25 @@ const payload = {
   error: failed ? (steps.find(s => !s.ok) || {}).note : null
 };
 console.log(ok ? `PASS in ${payload.total_ms}ms` : `FAIL at "${failed}" after ${payload.total_ms}ms`);
+
+// ---- persist the script audit -------------------------------------------
+if (SUPABASE_URL && SERVICE_KEY && typeof AUDIT !== 'undefined' && AUDIT.scripts.length) {
+  const rows = AUDIT.scripts.map(s => ({
+    url: s.url.slice(0, 400), vendor: vendorOf(s.url), type: s.type,
+    bytes: s.bytes || null, ms: s.ms || null, status: s.status || null,
+    failed: s.failed > 0, hits: s.hits, error: s.error || null
+  }));
+  for (let i = 0; i < rows.length; i += 300) {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/script_audit`, {
+      method: 'POST',
+      headers: { apikey: SERVICE_KEY, Authorization: 'Bearer ' + SERVICE_KEY,
+                 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify(rows.slice(i, i + 300))
+    });
+    if (!r.ok) console.error('script_audit save:', r.status, (await r.text()).slice(0, 150));
+  }
+  console.log(`Script audit: ${rows.length} resources, ${rows.filter(x => x.failed).length} failing.`);
+}
 
 if (SUPABASE_URL && SERVICE_KEY) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/synthetic_runs`, {

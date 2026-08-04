@@ -216,7 +216,7 @@ addEventListener('unhandledrejection', (e) => {
 });
 
 // rage + dead clicks
-let lastSel = '', lastAt = 0, hits = 0;
+let lastSel = '', lastAt = 0, hits = 0, deadChecks = 0;
 const selOf = el => { try {
   if (!el || !el.tagName) return '';
   return el.tagName.toLowerCase()
@@ -231,13 +231,24 @@ addEventListener('click', (e) => {
     } else { hits = 1; }
     lastSel = sel; lastAt = now;
 
-    // dead click: nothing in the DOM changed within 400ms of the click
+    // Dead click: nothing changed within 400ms of clicking something clickable.
+    // Deliberately cheap — the first version observed document.body with
+    // subtree+attributes on EVERY click, which on a page this busy means the
+    // observer fires constantly and the collector itself becomes a cost. We now
+    // watch childList only, skip attribute churn entirely, disconnect on the first
+    // mutation, and sample so at most a few clicks per visit are ever measured.
+    if (deadChecks >= 3) return;
     if (!e.target.closest('a,button,input,select,textarea,[role="button"],[onclick]')) return;
+    deadChecks++;
+    const urlBefore = location.href;
     let changed = false;
-    const mo = new MutationObserver(() => { changed = true; });
-    mo.observe(document.body, { childList: true, subtree: true, attributes: true });
-    setTimeout(() => { mo.disconnect(); if (!changed && location.pathname === (location.pathname))
-      sendHealth('dead_click', sel); }, 400);
+    const mo = new MutationObserver(() => { changed = true; mo.disconnect(); });
+    mo.observe(document.body, { childList: true, subtree: true });
+    setTimeout(() => {
+      mo.disconnect();
+      // a navigation is not a dead click
+      if (!changed && location.href === urlBefore) sendHealth('dead_click', sel);
+    }, 400);
   } catch {}
 }, { capture: true, passive: true });
 
