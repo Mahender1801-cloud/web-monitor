@@ -637,6 +637,14 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
         </p>
       </section>
 
+      <!-- REPORT -->
+      <section class="view" data-view="report">
+        <div class="toolbar" style="justify-content:flex-end;margin-bottom:12px">
+          <button class="btn pri" onclick="downloadReport()">⬇ Download report</button>
+        </div>
+        <div id="reportBox"></div>
+      </section>
+
       <!-- TOP BRANDS -->
       <section class="view" data-view="brands">
         <div id="benchBox"></div>
@@ -874,6 +882,7 @@ function buildNav(){
     ${navBtn('visitors','Visitors','👣')}
     ${navBtn('health','Health','🩺')}
     ${navBtn('brands','Top brands','🏆')}
+    ${navBtn('report','Report','📄')}
     ${navBtn('monitors','Monitors','🔗')}
     ${navBtn('webscore','Web Score','🎯')}
     <h4>QA Tasks</h4>`;
@@ -937,10 +946,10 @@ function toggleSide(force){
   document.getElementById('side').classList.toggle('open', open);
   document.getElementById('backdrop').classList.toggle('on', open);
 }
-const TITLES={summary:['Summary','Real-user performance across the store'],webvitals:['Web Vitals','Live from your visitors · PageSpeed as cross-check'],live:['Live Data','Raw events streaming from real visitors'],purchases:['Purchases','Real orders · what each buyer actually experienced'],visitors:['Visitors','Every visitor’s footprint · pages, time, source · click to see their path'],health:['Health','Anomalies, breakage, vendors, catalog &amp; the real purchase path'],brands:['Top brands','How this store compares with the leading eyewear retailers'],monitors:['Monitors','Per-page Web Vitals by device · 10-day daily sparklines'],webscore:['Web Score','Score & compare any URL — no PageSpeed API needed']};
+const TITLES={summary:['Summary','Real-user performance across the store'],webvitals:['Web Vitals','Live from your visitors · PageSpeed as cross-check'],live:['Live Data','Raw events streaming from real visitors'],purchases:['Purchases','Real orders · what each buyer actually experienced'],visitors:['Visitors','Every visitor’s footprint · pages, time, source · click to see their path'],health:['Health','Anomalies, breakage, vendors, catalog &amp; the real purchase path'],brands:['Top brands','How this store compares with the leading eyewear retailers'],report:['Report','A brief you can send — findings, cost, and the next three actions'],monitors:['Monitors','Per-page Web Vitals by device · 10-day daily sparklines'],webscore:['Web Score','Score & compare any URL — no PageSpeed API needed']};
 function setTitle(t,s){document.getElementById('vtitle').textContent=t;document.getElementById('vsub').textContent=s;}
 function showView(v){document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on', s.dataset.view===v));}
-function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderCWV();renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='purchases')renderPurchases(); if(v==='visitors')renderVisitors(); if(v==='health')renderHealth(); if(v==='brands')renderBrands(); if(v==='monitors')renderMonitors(); if(v==='webscore')renderWebScore(); }
+function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderCWV();renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='purchases')renderPurchases(); if(v==='visitors')renderVisitors(); if(v==='health')renderHealth(); if(v==='brands')renderBrands(); if(v==='report')renderReport(); if(v==='monitors')renderMonitors(); if(v==='webscore')renderWebScore(); }
 
 /* ===================== WEB SCORE (scores any URL via /api/score, no PSI API) === */
 const scoreColor=s=>s==null?'na':(s>=90?'good':s>=50?'warn':'poor');
@@ -1840,6 +1849,204 @@ function renderBrands(){
       + 'Your own row is measured from your own collector over the last 28 days.</div>';
     el.innerHTML=h;
   });
+}
+
+/* ===================== EXECUTIVE REPORT =================================
+   Everything else in this tool is a dashboard: panels you interpret yourself.
+   This is the artefact you send. It states a position, prices it, names the next
+   three actions, and is explicit about how each number was derived — which is the
+   part that decides whether a CXO trusts it or a developer can act on it.      */
+const REP = {};
+function fmtINR(v){ return v==null?'—':'₹'+Math.round(v).toLocaleString('en-IN'); }
+function pctChange(now, prev){
+  if(prev==null||prev===0||now==null) return null;
+  return ((now-prev)/prev)*100;
+}
+function verdictBadge(t, cls){ return '<span class="cellval '+cls+'" style="font-size:12px">'+esc(t)+'</span>'; }
+
+async function renderReport(){
+  const el=document.getElementById('reportBox');
+  el.innerHTML='<div class="empty" style="padding:18px">Assembling the report…</div>';
+  const cur=windowRange();
+  const [money, prio, bench, sy, hs, opt, co, alerts] = await Promise.all([
+    fetchMoney(cur.from,cur.to).catch(()=>null),
+    fetchPriority(cur.from,cur.to).catch(()=>null),
+    fetchBench().catch(()=>null),
+    sb.from('synthetic_runs').select('ok,failed_step,created_at').gte('created_at',iso(cur.from)).then(r=>r.data||[]).catch(()=>[]),
+    fetchHealth(cur.from,cur.to).catch(()=>null),
+    fetchOptimize().catch(()=>null),
+    fetchCoHealth(cur.from,cur.to).catch(()=>null),
+    fetchAlerts().catch(()=>[])
+  ]);
+  const stats = await fetchShopStats(cur.from,cur.to).catch(()=>null);
+  REP.data={money,prio,bench,sy,hs,opt,co,alerts,stats,cur};
+  el.innerHTML = buildReportHTML(REP.data);
+}
+
+function buildReportHTML(d){
+  const {money,prio,bench,sy,hs,opt,co,alerts,stats,cur} = d;
+  const days = money && +money.days ? +money.days : 7;
+  const perMonth = money ? (+money.lost_revenue||0)/days*30 : null;
+  const ok = sy.filter(r=>r.ok).length, tot = sy.length;
+  const uptime = tot ? Math.round(ok/tot*100) : null;
+  const errs = (hs&&hs.errors||[]).reduce((a,k)=>a+(+k[1]||0),0);
+  const ourLcp = bench && bench.ours && bench.ours.lcp;
+  const rank = bench && bench.rank_lcp, brands = bench && bench.total;
+
+  // ---- headline verdict, stated plainly
+  let verdict, vcls;
+  if((alerts||[]).some(a=>a[1]==='critical')){ verdict='Action needed now — an open critical alert'; vcls='poor'; }
+  else if(uptime!=null && uptime<80){ verdict='The purchase path is unreliable'; vcls='poor'; }
+  else if(money && +money.lost_revenue > 0 && perMonth > 50000){ verdict='Stable, but speed is costing real revenue'; vcls='warn'; }
+  else { verdict='Stable'; vcls='good'; }
+
+  const bands = (money&&money.bands)||[];
+  const fast = bands.find(b=>/Fast/.test(b[0])), slow = bands.find(b=>/Slow/.test(b[0]));
+  const convGap = fast&&slow&&+slow[3] ? ((+fast[3]-+slow[3])/+fast[3]*100) : null;
+
+  let h = '';
+  // ---------- header
+  h += '<div class="repcard" style="padding:18px 20px">'
+    + '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">'
+    +   '<h2 style="margin:0;font-family:\'Space Grotesk\';font-size:19px">Site performance &amp; revenue report</h2>'
+    +   verdictBadge(verdict, vcls)
+    +   '<span style="margin-left:auto;font-size:12px;color:var(--faint)">'
+    +     esc(cur.label)+' · generated '+new Date().toLocaleString()+'</span>'
+    + '</div>'
+    + '<div style="font-size:13px;color:var(--muted);margin-top:8px;line-height:1.65">'
+    + 'Hashtag Eyewear · hashtageyewears.com — measured from real visitors on this store, '
+    + 'the store\'s own orders, and a browser that walks the purchase path on a schedule.'
+    + '</div></div>';
+
+  // ---------- 1. business impact
+  h += '<div class="section-h"><h2>1 · Business impact</h2><span>what the numbers mean in revenue</span></div>';
+  h += '<div class="repgrid">'
+    + hcard('Revenue at risk', fmtINR(perMonth), 'per month, from speed alone', perMonth>0?'poor':'good')
+    + hcard('Orders in period', stats?(+stats.orders).toLocaleString():'—', fmtINR(stats&&stats.revenue)+' revenue')
+    + hcard('Conversion gap', convGap!=null?Math.round(convGap)+'%':'—', 'slow vs fast visitors', convGap>25?'poor':'warn')
+    + hcard('Market position', rank?('#'+rank+' of '+brands):'—', 'by real-user LCP', rank&&rank<=Math.ceil(brands/2)?'good':'warn')
+    + '</div>';
+
+  if(bands.length){
+    h += '<div style="font-size:13px;line-height:1.7;margin:4px 0 14px">'
+      + '<b>The finding.</b> Visitors served in under 2.5 seconds convert at <b>'+(fast?(+fast[3]).toFixed(3):'—')+'%</b>. '
+      + 'Those waiting over 4 seconds convert at <b>'+(slow?(+slow[3]).toFixed(3):'—')+'%</b>'
+      + (convGap!=null?(' — <b>'+Math.round(convGap)+'% lower</b>'):'')+'. '
+      + 'Applying the fast band\'s rate to the '+((money&&money.slow_sessions)||0).toLocaleString()
+      + ' slower sessions in this period gives <b>'+((money&&money.lost_orders)||0)+' orders</b> not placed, '
+      + 'or <b>'+fmtINR(money&&money.lost_revenue)+'</b> at the current average order value of '
+      + fmtINR(money&&money.aov)+'.'
+      + '</div>';
+  }
+
+  // ---------- 2. reliability
+  h += '<div class="section-h"><h2>2 · Reliability</h2><span>can a customer actually buy</span></div>';
+  h += '<div class="repgrid">'
+    + hcard('Purchase path', uptime!=null?(uptime+'%'):'—', ok+'/'+tot+' automated journeys passed', uptime===100?'good':uptime>=80?'warn':'poor')
+    + hcard('Open alerts', (alerts||[]).length, (alerts||[]).some(a=>a[1]==='critical')?'includes a critical':'nothing critical', (alerts||[]).length?'warn':'good')
+    + hcard('JS errors', errs.toLocaleString(), 'in this period', errs>1000?'poor':errs?'warn':'good')
+    + hcard('Checkout hand-off', co&&co.conversion!=null?((+co.conversion*100).toFixed(1)+'%'):'—',
+            co?((co.lost||0).toLocaleString()+' left after clicking'):'', co&&+co.conversion<0.25?'poor':'warn')
+    + '</div>';
+  if(co && co.sessions){
+    h += '<div style="font-size:13px;line-height:1.7;margin:4px 0 14px">'
+      + '<b>Where buyers are lost.</b> '+(+co.sessions).toLocaleString()+' shoppers reached the checkout control and '
+      + (+co.converted).toLocaleString()+' of them ordered. '
+      + (co.repeat_clicks?('<b>'+co.repeat_clicks+'</b> tapped it more than once, which is what people do when nothing appears to happen. '):'')
+      + 'Checkout itself runs on a third party, so everything past that click happens outside this site.'
+      + '</div>';
+  }
+
+  // ---------- 3. what to do
+  h += '<div class="section-h"><h2>3 · Recommended actions</h2><span>ordered by measured impact</span></div>';
+  const items=(prio&&prio.items)||[];
+  if(!items.length){ h += '<div class="empty" style="padding:14px">No outstanding technical issues in the last audit.</div>'; }
+  else {
+    h += '<div class="wv"><table><thead><tr><th style="width:30px">#</th><th>Action</th><th class="m">Measured</th><th class="m">Est. value</th><th class="m">Share</th></tr></thead><tbody>'
+      + items.slice(0,8).map((x,i)=>{
+          const [area,name,status,value,advice,mny,share]=x;
+          return '<tr><td class="cell mono">'+(i+1)+'</td>'
+            +'<td><b>'+esc(name)+'</b><div style="font-size:11.5px;color:var(--muted);margin-top:2px">'+esc(advice||'')+'</div></td>'
+            +'<td class="cell mono" style="font-size:11.5px">'+esc(value||'')+'</td>'
+            +'<td class="cell mono">'+(mny!=null?fmtINR(mny):'—')+'</td>'
+            +'<td class="cell mono">'+(share!=null?share+'%':'—')+'</td></tr>';
+        }).join('')
+      + '</tbody></table></div>'
+      + '<div style="font-size:11.5px;color:var(--faint);margin-top:8px">'
+      + 'Estimated value apportions the revenue gap above across these items in proportion to how far each one misses '
+      + 'its measured target. It is an apportionment, not a per-item measurement — the total is evidenced, the split is reasoned.'
+      + '</div>';
+  }
+
+  // ---------- 4. market
+  if(bench && (bench.brands||[]).length){
+    h += '<div class="section-h"><h2>4 · Market position</h2><span>real-user data from leading eyewear retailers</span></div>';
+    const top=(bench.brands||[]).slice(0,8);
+    h += '<div class="wv"><table><thead><tr><th>Brand</th><th>Region</th><th class="m">LCP</th><th class="m">INP</th></tr></thead><tbody>'
+      + top.map(x=>{
+          const [brand,region,score,lcp,inp,cls,kbv,isUs]=x;
+          return '<tr'+(isUs?' style="background:var(--accent-soft);font-weight:600"':'')+'>'
+            +'<td class="pg">'+esc(brand)+(isUs?' ← this store':'')+'</td>'
+            +'<td style="font-size:12px;color:var(--muted)">'+esc(region||'')+'</td>'
+            +'<td class="cell mono">'+(lcp?fmtMs(lcp):'—')+'</td>'
+            +'<td class="cell mono">'+(inp?fmtMs(inp):'—')+'</td></tr>';
+        }).join('')
+      + '</tbody></table></div>';
+    if(ourLcp && bench.median_lcp){
+      h += '<div style="font-size:13px;line-height:1.7;margin:8px 0 14px">'
+        + 'This store loads in <b>'+fmtMs(ourLcp)+'</b> for real visitors against a market median of <b>'
+        + fmtMs(bench.median_lcp)+'</b>, placing it <b>#'+rank+' of '+brands+'</b>. '
+        + 'The leaders sit near 1.5 seconds, so the gap to best-in-class is roughly '
+        + fmtMs(Math.max(0, ourLcp-1500))+'.</div>';
+    }
+  }
+
+  // ---------- 5. method
+  h += '<div class="section-h"><h2>5 · Method &amp; limitations</h2><span>how each number was produced</span></div>';
+  h += '<div class="repcard"><div style="font-size:12.5px;line-height:1.8;color:var(--muted)">'
+    + '<div><b>Speed and conversion</b> — every page view from this store\'s own visitors, joined to orders through the '
+    + 'session recorded at checkout. Conversion by speed band is a <b>correlation, not proof</b>: slower sessions also skew '
+    + 'towards older phones and weaker networks, and those shoppers may differ for reasons other than speed.</div>'
+    + '<div style="margin-top:8px"><b>Orders</b> — pulled server-side from Shopify, so the counts are the store\'s own, not a sampled estimate. '
+    + 'Returns and exchanges are excluded.</div>'
+    + '<div style="margin-top:8px"><b>Purchase path</b> — a real browser opens a product, adds it to the cart and reaches the checkout hand-off '
+    + 'on a schedule. It stops before payment.</div>'
+    + '<div style="margin-top:8px"><b>Market data</b> — Chrome UX Report field data for each brand: real visits to those sites, not a lab test. '
+    + 'Blank means Chrome does not publish enough traffic for that origin.</div>'
+    + '<div style="margin-top:8px"><b>Optimisation audit</b> — measured in a mobile browser across the home, product and collection templates, '
+    + 'after scrolling so lazy content is actually requested.</div>'
+    + '</div></div>';
+
+  return h;
+}
+
+// Standalone copy the user can send on. Self-contained so it opens anywhere.
+function downloadReport(){
+  if(!REP.data){ alert('Open the report first.'); return; }
+  const body=buildReportHTML(REP.data);
+  const css=`body{font:14px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;background:#F5F6F8;color:#101728;margin:0;padding:26px}
+  .wrap{max-width:1000px;margin:0 auto}
+  .repcard{background:#fff;border:1px solid #E7E9EE;border-radius:12px;padding:14px 16px;margin-bottom:12px}
+  .repgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:14px}
+  .repcard h4{margin:0 0 6px;font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:#616B7C}
+  .repcard .v{font-size:21px;font-weight:600}.repcard .s{font-size:11px;color:#8A93A6;margin-top:2px}
+  .section-h{display:flex;align-items:baseline;gap:10px;margin:22px 0 10px}
+  .section-h h2{font-size:15px;margin:0}.section-h span{font-size:12px;color:#8A93A6}
+  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #E7E9EE;border-radius:10px;overflow:hidden}
+  th,td{padding:9px 11px;font-size:12.5px;border-bottom:1px solid #EEF0F4;text-align:left}
+  th{background:#1F3864;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+  td.cell,th.m{text-align:right}.mono{font-family:ui-monospace,Menlo,monospace}
+  .cellval{padding:2px 8px;border-radius:6px;font-weight:600}
+  .good{background:#E2EFDA;color:#375623}.warn{background:#FFF2CC;color:#7F6000}
+  .poor{background:#FCE4E4;color:#9C0006}.na{background:#EDEDED;color:#9AA3B2}
+  .pg{font-weight:500}.empty{color:#8A93A6;text-align:center}
+  :root{--muted:#616B7C;--faint:#8A93A6;--line:#E7E9EE;--accent-soft:#EEF0FF;--ink:#101728;--good:#375623;--warn:#7F6000;--poor:#9C0006}`;
+  const html='<!doctype html><html><head><meta charset="utf-8"><title>Site performance & revenue report — Hashtag Eyewear</title><style>'+css+'</style></head><body><div class="wrap">'+body+'</div></body></html>';
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([html],{type:'text/html'}));
+  a.download='Hashtag-Eyewear-report-'+new Date().toISOString().slice(0,10)+'.html';
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),4000);
 }
 
 function renderHealth(){

@@ -94,7 +94,14 @@ async function profile(page, url) {
 // ---- the checks -------------------------------------------------------------
 function auditPage(p) {
   const out = [];
-  const add = (area, name, status, value, advice) => out.push({ page: p.url, area, name, status, value, advice });
+  // weight = how far this check misses, 0..1. It is what lets the priority list
+  // apportion the revenue gap differently per issue instead of printing one number
+  // against every row.
+  const add = (area, name, status, value, advice, weight) =>
+    out.push({ page: p.url, area, name, status, value, advice,
+               weight: Math.max(0, Math.min(1, weight == null ? (status === 'fail' ? 0.5 : 0.2) : weight)) });
+  const miss = (have, total) => total ? (1 - have / total) : 0;      // share not done
+  const over = (v, budget) => budget ? Math.min(1, Math.max(0, (v - budget) / budget)) : 0;
   const bytesOf = re => p.res.filter(r => re.test(r.type) || re.test(r.ct)).reduce((a, r) => a + (r.bytes || 0), 0);
   const first = (u) => { try { return new URL(u).host.endsWith(new URL(p.url).host); } catch { return false; } };
 
@@ -105,34 +112,40 @@ function auditPage(p) {
   add('Images', 'Lazy-load below the fold',
       !below.length ? 'pass' : lazyBelow / below.length >= 0.8 ? 'pass' : lazyBelow / below.length >= 0.5 ? 'warn' : 'fail',
       `${lazyBelow}/${below.length} lazy`,
-      'Add loading="lazy" to images that start below the fold. Every eager one competes with the LCP image for bandwidth.');
+      'Add loading="lazy" to images that start below the fold. Every eager one competes with the LCP image for bandwidth.',
+      miss(lazyBelow, below.length));
 
   const dims = imgs.filter(i => i.hasDims).length;
   add('Images', 'Width/height set (layout shift)',
       !imgs.length ? 'pass' : dims / imgs.length >= 0.9 ? 'pass' : dims / imgs.length >= 0.6 ? 'warn' : 'fail',
       `${dims}/${imgs.length} sized`,
-      'Set width and height on every <img>. Without them the browser cannot reserve space and the page jumps as images arrive (CLS).');
+      'Set width and height on every <img>. Without them the browser cannot reserve space and the page jumps as images arrive (CLS).',
+      miss(dims, imgs.length) * 0.5);
 
   const responsive = imgs.filter(i => i.srcset).length;
   add('Images', 'Responsive srcset',
       !imgs.length ? 'pass' : responsive / imgs.length >= 0.8 ? 'pass' : responsive / imgs.length >= 0.4 ? 'warn' : 'fail',
       `${responsive}/${imgs.length} with srcset`,
-      'Serve srcset so phones download a phone-sized file. Shopify can do this via the image_url filter with widths.');
+      'Serve srcset so phones download a phone-sized file. Shopify can do this via the image_url filter with widths.',
+      miss(responsive, imgs.length));
 
   const oversized = imgs.filter(i => i.dispW > 0 && i.natW > i.dispW * 2).length;
   add('Images', 'Oversized for their slot', oversized === 0 ? 'pass' : oversized <= 3 ? 'warn' : 'fail',
       `${oversized} more than 2× too large`,
-      'These download far more pixels than are shown. Request the displayed width instead.');
+      'These download far more pixels than are shown. Request the displayed width instead.',
+      Math.min(1, oversized / 25));
 
   const modern = p.res.filter(r => /image\//.test(r.ct)).filter(r => /webp|avif/.test(r.ct)).length;
   const allImgRes = p.res.filter(r => /image\//.test(r.ct)).length;
   add('Images', 'Modern format (WebP/AVIF)',
       !allImgRes ? 'pass' : modern / allImgRes >= 0.8 ? 'pass' : modern / allImgRes >= 0.4 ? 'warn' : 'fail',
       `${modern}/${allImgRes} modern`,
-      'WebP is typically 25-35% smaller than JPEG at the same quality. Shopify serves it automatically when the theme requests it.');
+      'WebP is typically 25-35% smaller than JPEG at the same quality. Shopify serves it automatically when the theme requests it.',
+      miss(modern, allImgRes) * 0.8);
 
   add('Images', 'Total image weight', kb(bytesOf(/^image/)) < 900 ? 'pass' : kb(bytesOf(/^image/)) < 2000 ? 'warn' : 'fail',
-      `${kb(bytesOf(/^image/))} KB`, 'Images are usually the biggest slice of a store page. Compress and size them to their slot.');
+      `${kb(bytesOf(/^image/))} KB`, 'Images are usually the biggest slice of a store page. Compress and size them to their slot.',
+      over(kb(bytesOf(/^image/)), 900));
 
   // ---- javascript
   const scripts = p.dom.scripts.filter(s => s.src);
@@ -140,23 +153,27 @@ function auditPage(p) {
   add('JavaScript', 'Render-blocking scripts',
       blocking.length === 0 ? 'pass' : blocking.length <= 3 ? 'warn' : 'fail',
       `${blocking.length} blocking in <head>`,
-      'Add defer (or async) to scripts in the head. Each blocking script stops the browser from painting.');
+      'Add defer (or async) to scripts in the head. Each blocking script stops the browser from painting.',
+      Math.min(1, blocking.length / 8));
 
   const third = scripts.filter(s => !first(s.src));
   add('JavaScript', 'Third-party scripts', third.length <= 10 ? 'pass' : third.length <= 20 ? 'warn' : 'fail',
       `${third.length} of ${scripts.length} are third-party`,
-      'Every app adds scripts. Remove apps you no longer use — that is the single biggest lever on a Shopify theme.');
+      'Every app adds scripts. Remove apps you no longer use — that is the single biggest lever on a Shopify theme.',
+      Math.min(1, third.length / 30));
 
   const jsBytes = kb(bytesOf(/javascript|^script/));
   add('JavaScript', 'Total JS weight', jsBytes < 500 ? 'pass' : jsBytes < 1200 ? 'warn' : 'fail',
-      `${jsBytes} KB`, 'Aim under ~500 KB of JS. Above that, phones spend longer parsing than downloading.');
+      `${jsBytes} KB`, 'Aim under ~500 KB of JS. Above that, phones spend longer parsing than downloading.',
+      over(jsBytes, 500));
 
   // ---- css
   const blockingCss = p.dom.styles.filter(s => s.inHead && s.media === 'all' && !s.preload);
   add('CSS', 'Render-blocking stylesheets',
       blockingCss.length <= 1 ? 'pass' : blockingCss.length <= 3 ? 'warn' : 'fail',
       `${blockingCss.length} blocking`,
-      'Inline the CSS needed for the first screen and load the rest asynchronously. This is what "critical CSS" means.');
+      'Inline the CSS needed for the first screen and load the rest asynchronously. This is what "critical CSS" means.',
+      Math.min(1, blockingCss.length / 8));
 
   add('CSS', 'Critical CSS inlined',
       p.dom.inlineCss > 2000 ? 'pass' : p.dom.inlineCss > 0 ? 'warn' : 'fail',
@@ -206,7 +223,8 @@ function auditPage(p) {
   const total = kb(p.res.reduce((a, r) => a + (r.bytes || 0), 0));
   add('Delivery', 'Total page weight', total < 1500 ? 'pass' : total < 3000 ? 'warn' : 'fail',
       `${total} KB across ${p.res.length} requests`,
-      'On a 4G phone every extra megabyte is roughly a second before anything useful appears.');
+      'On a 4G phone every extra megabyte is roughly a second before anything useful appears.',
+      over(total, 1500));
 
   return out;
 }
