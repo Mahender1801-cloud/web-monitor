@@ -1811,6 +1811,13 @@ function renderBrands(){
       + hcard('Market median', b.median_lcp?fmtMs(b.median_lcp):'—', 'across these brands')
       + hcard('Your rank', b.rank_lcp?('#'+b.rank_lcp+' of '+(b.total||0)):'—', 'fastest first')
       + hcard('Your INP', ours.inp?fmtMs(ours.inp):'—', 'real visitors', ours.inp<=200?'good':ours.inp<=500?'warn':'poor')
+      + '</div>'
+      + '<div class="repgrid" style="margin-top:-6px">'
+      + hcard('Your PSI score', ours.psi??'—', b.median_psi?('market median '+Math.round(b.median_psi)):'lab score',
+              ours.psi==null?'':(ours.psi>=90?'good':ours.psi>=50?'warn':'poor'))
+      + hcard('Your page weight', ours.kb?((ours.kb/1024).toFixed(1)+' MB'):'—',
+              b.median_kb?('market median '+(b.median_kb/1024).toFixed(1)+' MB'):'homepage',
+              ours.kb&&b.median_kb?(ours.kb<=b.median_kb?'good':'poor'):'')
       + '</div>';
     h+='<div class="section-h"><h2>Leading eyewear retailers</h2><span>field data from Chrome UX Report — real visitors on those sites, not a lab test</span></div>';
     h+='<div class="wv"><table><thead><tr><th>Brand</th><th>Region</th><th class="m">PSI score</th><th class="m">LCP</th><th class="m">INP</th><th class="m">CLS</th><th class="m">Page weight</th></tr></thead><tbody>'
@@ -1824,7 +1831,7 @@ function renderBrands(){
             +'<td class="cell">'+(lcp==null?'—':'<span class="cellval '+band(lcp,2500,4000)+'">'+fmtMs(lcp)+'</span>')+'</td>'
             +'<td class="cell">'+(inp==null?'—':'<span class="cellval '+band(inp,200,500)+'">'+fmtMs(inp)+'</span>')+'</td>'
             +'<td class="cell">'+(cls==null?'—':'<span class="cellval '+band(+cls,0.1,0.25)+'">'+(+cls).toFixed(2)+'</span>')+'</td>'
-            +'<td class="cell mono">'+(kbv?Math.round(kbv/1024*10)/10+' MB':'—')+'</td></tr>';
+            +'<td class="cell mono">'+(kbv&&+kbv>0?(Math.round(kbv/1024*10)/10+' MB'):'—')+'</td></tr>';
         }).join('')
       + '</tbody></table></div>'
       + '<div style="font-size:11.5px;color:var(--faint);margin-top:10px">'
