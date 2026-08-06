@@ -1,0 +1,51 @@
+name: QA tasks (browser)
+
+# The QA checks that need a real browser: menus, filters, infinite scroll,
+# variant images, the cart drawer, discount codes, keyboard focus, and layout
+# measured at an actual viewport width. These used to be a human clicking
+# through the checklist every morning.
+#
+# Twice a day rather than hourly. These walk a lot of the store — collection,
+# product, cart, checkout handoff, then the homepage again on three engines —
+# so running them every hour would be needless load on the shop for questions
+# whose answers only change when the theme changes. The hourly purchase-path
+# check in synthetic.yml is the one that needs to be frequent, because a broken
+# add-to-cart is a revenue outage.
+on:
+  schedule:
+    # Once after the overnight deploy window, once mid-afternoon. Odd minutes
+    # so the runs never land on a round number alongside everything else.
+    - cron: '37 2 * * *'
+    - cron: '37 11 * * *'
+  workflow_dispatch:
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Playwright with all three engines
+        # Chromium drives the checks and covers Chrome and Edge; WebKit is
+        # Safari and Firefox is Gecko, both needed for the cross-browser task.
+        # If an engine fails to install the run still reports on the others and
+        # names the one it could not launch, rather than silently passing.
+        run: npm i -D playwright@1.48.0 && npx playwright install --with-deps chromium webkit firefox
+
+      - name: Stagger the start
+        run: sleep $((RANDOM % 180))
+
+      - name: Run the browser QA suite
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          STORE_URL:            https://hashtageyewears.com
+          # Optional. Without it the discount check proves the field rejects an
+          # invalid code; with it, it proves a real code actually discounts.
+          QA_DISCOUNT_CODE:     ${{ secrets.QA_DISCOUNT_CODE }}
+          RUN_TYPE:             ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'scheduled' }}
+        run: node scripts/qa_browser.mjs

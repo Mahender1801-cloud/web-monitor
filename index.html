@@ -854,16 +854,20 @@ const SAMPLE_MON=[
 ];
 const TASK_CATS=['Homepage Testing','Search Page Testing','Collection Page Testing','Product Page Testing','Cart & Checkout Testing','Performance & Speed Testing','App & Integration Testing','SEO & Metadata Testing','Security & Compliance Testing','Cross-Browser & Accessibility Testing'];
 const SAMPLE_ITEMS=[
-  ['Homepage Testing','Check homepage loading speed','auto','load_speed'],['Homepage Testing','Verify banners / sliders load','manual',null],['Homepage Testing','Test mega menu and navigation','manual',null],['Homepage Testing','Mobile + desktop responsiveness','manual',null],['Homepage Testing','Check 404 and broken links','auto','broken_links'],
-  ['Search Page Testing','Search + autocomplete','manual',null],['Search Page Testing','No-results page behavior','manual',null],['Search Page Testing','Search filters / sorting','manual',null],
-  ['Collection Page Testing','Collection loading speed','auto','load_speed'],['Collection Page Testing','Filters / sorting','manual',null],['Collection Page Testing','Product cards alignment','manual',null],['Collection Page Testing','Banners / images load','auto','http_status'],
-  ['Product Page Testing','Product page loading speed','auto','load_speed'],['Product Page Testing','Add to Cart & Buy Now','manual',null],['Product Page Testing','Variant selection','manual',null],['Product Page Testing','Reviews loading','manual',null],
-  ['Cart & Checkout Testing','Add product to cart','manual',null],['Cart & Checkout Testing','Drawer cart working','manual',null],['Cart & Checkout Testing','Shiprocket redirect','manual',null],['Cart & Checkout Testing','Pincode serviceability','manual',null],
-  ['Performance & Speed Testing','Core Web Vitals (PageSpeed)','auto','cwv'],['Performance & Speed Testing','Heavy scripts check','auto','load_speed'],['Performance & Speed Testing','Lazy loading','manual',null],['Performance & Speed Testing','Third-party script bloat','manual',null],
-  ['App & Integration Testing','Wishlist app','manual',null],['App & Integration Testing','Review integrations','manual',null],
-  ['SEO & Metadata Testing','Meta titles / descriptions','auto','meta'],['SEO & Metadata Testing','sitemap.xml & robots.txt','auto','robots_sitemap'],['SEO & Metadata Testing','Schema markup','auto','schema'],['SEO & Metadata Testing','Canonical tags','auto','canonical'],['SEO & Metadata Testing','Image alt text','manual',null],
-  ['Security & Compliance Testing','SSL certificate validity','auto','ssl'],['Security & Compliance Testing','Cookie consent banner','manual',null],['Security & Compliance Testing','Privacy / Terms / Returns load','auto','policy_pages'],
-  ['Cross-Browser & Accessibility Testing','Chrome / Safari / Firefox / Edge','manual',null],['Cross-Browser & Accessibility Testing','Keyboard nav / screen reader','manual',null],['Cross-Browser & Accessibility Testing','404 & broken link check','auto','broken_links'],
+  /* Offline sample only. Kept in step with the real seed: every check is now
+     scripted — 'browser' ones by scripts/qa_browser.mjs in a real Chromium,
+     the rest by scripts/check.mjs. Pincode serviceability stays manual because
+     proving it means typing a real address into the live checkout. */
+  ['Homepage Testing','Check homepage loading speed','auto','load_speed'],['Homepage Testing','Verify banners / sliders load','auto','images_load'],['Homepage Testing','Test mega menu and navigation','auto','browser'],['Homepage Testing','Mobile + desktop responsiveness','auto','viewport_meta'],['Homepage Testing','Check 404 and broken links','auto','broken_links'],
+  ['Search Page Testing','Search + autocomplete','auto','search_page'],['Search Page Testing','No-results page behavior','auto','search_noresults'],['Search Page Testing','Search filters / sorting','auto','browser'],
+  ['Collection Page Testing','Collection loading speed','auto','load_speed'],['Collection Page Testing','Filters / sorting','auto','browser'],['Collection Page Testing','Product cards alignment','auto','browser'],['Collection Page Testing','Banners / images load','auto','http_status'],
+  ['Product Page Testing','Product page loading speed','auto','load_speed'],['Product Page Testing','Add to Cart & Buy Now','auto','browser'],['Product Page Testing','Variant selection','auto','browser'],['Product Page Testing','Reviews loading','auto','review_app'],
+  ['Cart & Checkout Testing','Add product to cart','auto','browser'],['Cart & Checkout Testing','Drawer cart working','auto','browser'],['Cart & Checkout Testing','Shiprocket redirect','auto','browser'],['Cart & Checkout Testing','Pincode serviceability','manual',null],
+  ['Performance & Speed Testing','Core Web Vitals (PageSpeed)','auto','cwv'],['Performance & Speed Testing','Heavy scripts check','auto','load_speed'],['Performance & Speed Testing','Lazy loading','auto','lazyload'],['Performance & Speed Testing','Third-party script bloat','auto','script_bloat'],
+  ['App & Integration Testing','Wishlist app','auto','wishlist_app'],['App & Integration Testing','Review integrations','auto','review_app'],
+  ['SEO & Metadata Testing','Meta titles / descriptions','auto','meta'],['SEO & Metadata Testing','sitemap.xml & robots.txt','auto','robots_sitemap'],['SEO & Metadata Testing','Schema markup','auto','schema'],['SEO & Metadata Testing','Canonical tags','auto','canonical'],['SEO & Metadata Testing','Image alt text','auto','img_alt'],
+  ['Security & Compliance Testing','SSL certificate validity','auto','ssl'],['Security & Compliance Testing','Cookie consent banner','auto','cookie_consent'],['Security & Compliance Testing','Privacy / Terms / Returns load','auto','policy_pages'],
+  ['Cross-Browser & Accessibility Testing','Chrome / Safari / Firefox / Edge','auto','browser'],['Cross-Browser & Accessibility Testing','Keyboard nav / screen reader','auto','browser'],['Cross-Browser & Accessibility Testing','404 & broken link check','auto','broken_links'],
 ].map((r,i)=>({id:'i'+i,category:r[0],item:r[1],check_type:r[2],auto_key:r[3],sort:i}));
 
 /* ===================== STATE ================== */
@@ -3267,8 +3271,12 @@ function renderTask(){
   document.getElementById('taskDesc').textContent=`${items.length} checks · ${items.filter(i=>i.check_type==='auto').length} automated`;
   document.getElementById('taskList').innerHTML=items.map(it=>{
     const c=checks.find(x=>x.category===it.category&&x.item===it.item);
-    const st=c?c.status:(it.check_type==='manual'?'pending':'pending');
+    const st=c?c.status:'pending';
     const auto=it.check_type==='auto';
+    /* A scripted check can still come back 'manual' — it ran, went as far as it
+       safely could, and is handing the last step to a person. Give those rows
+       the Pass/Attention buttons too, or the task becomes a dead end. */
+    const needsHuman=!auto||st==='manual';
     const when=c?timeAgo(c.created_at):'not run';
     return `<div class="taskrow">
       <span class="st ${st}"></span>
@@ -3277,7 +3285,7 @@ function renderTask(){
       <span class="meta">
         ${c&&c.value?`<span class="val">${c.value}</span>`:''}
         <span>${when}</span>
-        ${auto?'':`<button class="mini" onclick="markManual('${it.category}','${it.item.replace(/'/g,"&#39;")}','pass')">✓ Pass</button><button class="mini" onclick="markManual('${it.category}','${it.item.replace(/'/g,"&#39;")}','fail')">⚠ Attention</button>`}
+        ${needsHuman?`<button class="mini" onclick="markManual('${it.category}','${it.item.replace(/'/g,"&#39;")}','pass')">✓ Pass</button><button class="mini" onclick="markManual('${it.category}','${it.item.replace(/'/g,"&#39;")}','fail')">⚠ Attention</button>`:''}
       </span></div>`;
   }).join('')||'<div class="empty">No checks in this category</div>';
 }

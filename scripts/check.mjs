@@ -684,6 +684,10 @@ async function runAuto(key, monitor, homepage) {
     case 'review_app':      return probeMarkup(u, ['judge\\.me', 'yotpo', 'loox', 'stamped', 'okendo', 'reviewsio', 'jdgm'], 'review app found', 'no review markup');
     case 'cookie_consent':  return probeMarkup(homepage, ['cookieyes', 'cookiebot', 'consent', 'gdpr', 'cookie-banner', 'cookie-consent'], 'consent banner found', 'no consent markup');
     case 'cwv':             return null; // handled by PSI directly
+    // Filled by scripts/qa_browser.mjs, which drives a real browser. Skipped
+    // here rather than guessed at: these checks need JavaScript and layout,
+    // and fetching HTML cannot see either.
+    case 'browser':         return null;
     default:                return null;
   }
 }

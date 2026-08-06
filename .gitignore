@@ -1,0 +1,9 @@
+# Playwright is installed fresh by the workflows, and locally by
+# `npm i -D playwright` when you want to run scripts/qa_browser.mjs by hand.
+node_modules/
+package.json
+package-lock.json
+
+# Playwright leftovers from a local run
+test-results/
+playwright-report/
