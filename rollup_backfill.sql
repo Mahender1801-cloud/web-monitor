@@ -1,0 +1,50 @@
+-- ============================================================================
+-- Rebuild the stored daily histograms for the whole retained window.
+-- Run AFTER bot_filter.sql.  Safe to re-run.
+--
+-- bot_filter.sql ended with rum_rollup_refresh(4), which cleaned 4-7 Aug. The
+-- other 25 days in rum_daily still have crawler traffic baked into their stored
+-- histograms, so any 7-day or 28-day view keeps reading the polluted figures
+-- even though the underlying rows are now correctly labelled.
+--
+-- This is not only about the 6 Aug spike. Every day carries crawlers:
+--
+--     28 Jul   920 of  9,993     2 Aug    586 of  9,126
+--     31 Jul   777 of 11,614     3 Aug  1,204 of  9,561
+--      1 Aug   678 of  9,882     6 Aug  7,543 of 15,972
+--
+-- Around 6-12% on an ordinary day, and 47% on the day the search crawler ran.
+-- Raw events go back to 10 Jul, which is the whole window rum_daily covers, so
+-- every stored day can be rebuilt from labelled rows.
+-- ============================================================================
+
+-- Preferred: one call, bounded by the function's own 300s timeout.
+select public.rum_rollup_refresh(29);
+
+-- ---------------------------------------------------------------------------
+-- If that times out, do it in two halves instead — each rum_rollup_day call
+-- carries its own 60s limit, so a slow day cannot take the batch down with it.
+--
+--   select public.rum_rollup_day(d::date)
+--   from generate_series('2026-07-10'::date, '2026-07-24'::date, '1 day') d;
+--
+--   select public.rum_rollup_day(d::date)
+--   from generate_series('2026-07-25'::date, current_date, '1 day') d;
+-- ---------------------------------------------------------------------------
+
+-- Verify: stored views per day must equal what the filtered view returns.
+--
+--   select d, views from public.rum_daily order by d desc limit 10;
+--
+--   select count(*) from public.rum_events
+--   where created_at >= '2026-08-03' and created_at < '2026-08-04';
+--     -- should equal rum_daily.views for 2026-08-03
+--
+-- And the shape of the numbers should hold everywhere now — TTFB below FCP
+-- below LCP, on any window you pick:
+--
+--   select public.hist_pct(public.hist_sum(h_ttfb), 25) ttfb,
+--          public.hist_pct(public.hist_sum(h_fcp),  50) fcp,
+--          public.hist_pct(public.hist_sum(h_lcp),  50) lcp
+--   from public.rum_daily where d > current_date - 28;
+-- ---------------------------------------------------------------------------
