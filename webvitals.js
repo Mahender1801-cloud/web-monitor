@@ -184,8 +184,37 @@ addEventListener('click', (e) => {
 // ============================================================================
 const HEALTH_ENDPOINT = SUPABASE_URL + '/rest/v1/health_events';
 let healthSent = 0;
+
+// One row per distinct problem per visit, not one per time it fires.
+//
+// The per-page cap of 25 below was not enough on its own. Third-party apps throw
+// the same handful of errors on every page a shopper opens, so the store logged
+// 867,000 js_errors against ~300,000 pageviews — 229,000 of them the single line
+// "unhandled promise: Failed to fetch". That filled the database without adding
+// anything: knowing a wishlist app broke on 80,000 pageviews and knowing it
+// broke for 6,000 shoppers lead to exactly the same fix.
+//
+// Signatures live in sessionStorage so they survive navigation within a visit,
+// which is where the repetition came from. It is capped and wrapped because
+// private-mode Safari throws on sessionStorage, and a crash here would take the
+// beacon down with it.
+const HEALTH_SEEN_KEY = '_hs_seen';
+let healthSeen = new Set();
+try { healthSeen = new Set(JSON.parse(sessionStorage.getItem(HEALTH_SEEN_KEY) || '[]')); } catch {}
+
+function healthIsNew(sig) {
+  if (healthSeen.has(sig)) return false;
+  healthSeen.add(sig);
+  if (healthSeen.size > 40) return true;    // stop growing the key on a hostile page
+  try { sessionStorage.setItem(HEALTH_SEEN_KEY, JSON.stringify([...healthSeen])); } catch {}
+  return true;
+}
+
 function sendHealth(kind, detail, extra) {
   if (healthSent > 25) return;              // never let a broken page flood the DB
+  // Collapse on the shape of the problem, not its full text: URLs carry cache
+  // busters and ids that would make every occurrence look distinct.
+  if (!healthIsNew(kind + '|' + String(detail || '').replace(/[?#].*$/, '').slice(0, 80))) return;
   healthSent++;
   try {
     fetch(HEALTH_ENDPOINT, {

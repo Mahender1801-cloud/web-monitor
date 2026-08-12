@@ -1,0 +1,82 @@
+# ============================================================================
+# Postgres + PostgREST, the same pair Supabase runs, in your own Docker.
+#
+# What this is for: Supabase is full because it holds every raw event back to
+# 10 July. This keeps the whole history here instead, with no row limit and no
+# monthly ceiling, and lets Supabase carry only the recent window.
+#
+# What this cannot be, on a laptop: the live ingest. webvitals.js runs in your
+# customers' browsers and GitHub Actions runs on GitHub's machines; neither can
+# reach a container on your desk, and anything sent while the laptop sleeps is
+# gone — the beacon does not retry. So Supabase stays the front door, and this
+# is the archive behind it.
+#
+# The same file becomes the live database the day you run it on a host with a
+# public address. Nothing here is laptop-specific; only the URL the dashboard
+# and webvitals.js point at would change.
+#
+#   docker compose -f docker/docker-compose.yml up -d
+#
+# Ports are deliberately off the defaults: 5432 and 3000 are common, and this
+# machine already runs ERPNext on 8080.
+# ============================================================================
+name: web-monitor-archive
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: wm-archive-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: monitor
+      POSTGRES_PASSWORD: ${PGPASSWORD:-monitor_local_dev}
+      POSTGRES_DB: monitor
+      # Same collation Supabase uses, so ORDER BY on text matches what the
+      # dashboard shows today rather than quietly re-sorting.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "5433:5432"
+    volumes:
+      - archive-data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monitor -d monitor"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # A month of raw events is a few hundred MB; give the planner room to sort
+    # and hash it without spilling to disk on every dashboard query.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - work_mem=32MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - max_wal_size=2GB
+
+  # Serves the same REST surface the dashboard already speaks, so index.html
+  # can be pointed here by changing one URL instead of being rewritten.
+  rest:
+    image: postgrest/postgrest:v12.2.3
+    container_name: wm-archive-rest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://monitor:${PGPASSWORD:-monitor_local_dev}@db:5432/monitor
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: web_anon
+      PGRST_OPENAPI_SERVER_PROXY_URI: http://localhost:3001
+      # Bound the damage a runaway query can do, and match the row cap the
+      # dashboard code already works around.
+      PGRST_DB_MAX_ROWS: 100000
+      PGRST_DB_POOL: 10
+    ports:
+      - "3001:3000"
+
+volumes:
+  archive-data:

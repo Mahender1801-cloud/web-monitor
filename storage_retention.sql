@@ -2,9 +2,31 @@
 -- Keep the database under the free tier, without losing any report.
 -- Run storage_audit.sql FIRST and read its output. Run the steps here in order.
 --
--- The problem, measured from outside: rum_events_all holds ~303,000 rows going
--- back to 10 July, averaging ~2 KB each. Nothing else is close — shop_orders is
--- 37k rows, funnel_events 15k, everything else is in the hundreds.
+-- CORRECTION, from measuring the data once it was copied into Docker where it
+-- could be counted properly. My first reading of this was wrong.
+--
+-- I originally wrote that rum_events_all was the problem and nothing else was
+-- close. That was based on counting each table through PostgREST, and the count
+-- on health_events returned HTTP 500 — it timed out — so I moved past it. It is
+-- the bigger table:
+--
+--     health_events    884,262 rows    314 MB
+--     rum_events_all   363,187 rows    ~550 MB projected at full size
+--     shop_orders       37,035 rows      6 MB
+--     everything else                   <5 MB each
+--
+-- And 867,000 of those health rows are js_error, 302 MB of the 314. They are a
+-- handful of third-party failures repeated on every page a shopper opens:
+--
+--     unhandled promise: Failed to fetch                 229,299   26.4%
+--     Uncaught NetworkError: importScripts               117,004   13.5%
+--     failed to load: wishlist.thimatic-apps.com          80,536    9.3%
+--     unhandled promise: Cannot read properties of null   56,318    6.5%
+--     failed to load: checkout-merchant.snapmint.com      45,021    5.2%
+--
+-- So both tables need bounding, and the js_error flood needs stopping at the
+-- source — see the change to webvitals.js, which now sends one row per distinct
+-- problem per visit instead of one per time it fires.
 --
 -- The architecture already anticipated this. rum_daily stores merged histograms
 -- per day, which is why the dashboard is fast at any window size: history lives
@@ -234,6 +256,42 @@ grant execute on function public.rum_prune(int) to anon;
 --
 -- Any row returning deleted = -1 was skipped because its summary is missing.
 -- Fix those with  select public.rum_rollup_group('<that date>');  then re-run.
+
+
+-- ---------------------------------------------------------------------------
+-- STEP 5b — the bigger half: health_events.
+--
+-- Run scripts/db_sync.mjs first. Unlike rum_events, there is no rollup standing
+-- behind this table, so whatever is deleted here exists only in the Docker
+-- archive afterwards. That is the whole point of copying it there first.
+--
+-- The keep window is shorter than for rum_events on purpose: the dashboard's
+-- error views look at the last 7 days, and an error that stopped three weeks
+-- ago is history, not an alert.
+-- ---------------------------------------------------------------------------
+create or replace function public.health_prune(p_keep_days int default 21)
+returns bigint language plpgsql
+set statement_timeout = '300s'
+as $$
+declare n bigint;
+begin
+  delete from public.health_events where created_at < now() - make_interval(days => p_keep_days);
+  get diagnostics n = row_count;
+  return n;
+end $$;
+grant execute on function public.health_prune(int) to anon;
+
+-- Check what it would remove, and confirm the archive already has it:
+--   select created_at::date d, count(*) from public.health_events
+--   where created_at < now() - interval '21 days' group by 1 order by 1;
+--
+-- Against the archive (psql on the container), the same range must be present:
+--   docker exec wm-archive-db psql -U monitor -d monitor -c \
+--     "select min(created_at)::date, max(created_at)::date, count(*) from health_events"
+--
+-- Then:
+--   select public.health_prune(21);
+--   vacuum full public.health_events;
 
 
 -- ---------------------------------------------------------------------------
