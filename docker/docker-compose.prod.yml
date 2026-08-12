@@ -1,0 +1,115 @@
+# ============================================================================
+# The live database — Docker in place of Supabase.
+#
+# Same three pieces Supabase gives you, run yourself:
+#   db    Postgres, holding everything with no row or size ceiling
+#   rest  PostgREST, the exact API the dashboard and webvitals.js already speak
+#   edge  Caddy, terminating HTTPS with a certificate it obtains and renews
+#
+# HTTPS is not optional here. hashtageyewears.com is served over HTTPS, and a
+# browser refuses to POST from an HTTPS page to an HTTP endpoint — the beacon
+# would fail silently on every visitor. Caddy gets a real certificate from
+# Let's Encrypt, which is why this needs a domain name pointed at the host and
+# ports 80 and 443 free.
+#
+# Auth is deliberately identical to Supabase's. A Supabase anon key is an HS256
+# JWT whose payload is {"role":"anon"}; PostgREST reads exactly that when given
+# the same signing secret. So the client keeps sending apikey and
+# Authorization: Bearer <jwt> and nothing about the request shape changes —
+# only the hostname.
+#
+# WHERE THIS RUNS MATTERS MORE THAN WHAT IT RUNS.
+# On a laptop this replaces Supabase only while the laptop is awake and online.
+# webvitals.js fires from your customers' phones; whatever it sends while the
+# machine is asleep is gone, because the beacon does not retry. Put this on a
+# host that stays up — a small VPS is a few dollars a month — or keep Supabase
+# as the front door and use docker-compose.yml as the archive behind it.
+#
+#   cp docker/.env.example docker/.env    # then fill it in
+#   docker compose -f docker/docker-compose.prod.yml --env-file docker/.env up -d
+# ============================================================================
+name: web-monitor
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: wm-db
+    restart: always
+    environment:
+      POSTGRES_USER: ${PGUSER:?set PGUSER in docker/.env}
+      POSTGRES_PASSWORD: ${PGPASSWORD:?set PGPASSWORD in docker/.env}
+      POSTGRES_DB: ${PGDATABASE:?set PGDATABASE in docker/.env}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER} -d ${PGDATABASE}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    # Not published to the host. The only way in is through PostgREST, which
+    # connects on the internal network. An exposed 5432 with a password is the
+    # single most common way a self-hosted Postgres gets found and drained.
+    expose:
+      - "5432"
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - work_mem=32MB
+      - -c
+      - maintenance_work_mem=512MB
+      - -c
+      - max_wal_size=4GB
+      - -c
+      - random_page_cost=1.1        # assume SSD; the planner otherwise avoids indexes
+      - -c
+      - log_min_duration_statement=2000
+
+  rest:
+    image: postgrest/postgrest:v12.2.3
+    container_name: wm-rest
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://${PGUSER}:${PGPASSWORD}@db:5432/${PGDATABASE}
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      # The same secret that signed the key the browser carries. Supabase's anon
+      # key works here verbatim if you reuse its JWT secret, which makes the
+      # cutover reversible: point the URL back and the old key still validates.
+      PGRST_JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in docker/.env}
+      PGRST_DB_MAX_ROWS: 100000
+      PGRST_DB_POOL: 20
+      PGRST_SERVER_TIMING_ENABLED: "true"
+      PGRST_OPENAPI_MODE: disabled          # do not publish the schema publicly
+    expose:
+      - "3000"
+
+  edge:
+    image: caddy:2-alpine
+    container_name: wm-edge
+    restart: always
+    depends_on:
+      - rest
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in docker/.env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in docker/.env}
+      ALLOW_ORIGIN: ${ALLOW_ORIGIN:-https://hashtageyewears.com}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data              # certificates; losing this re-issues them
+      - caddy-config:/config
+
+volumes:
+  db-data:
+  caddy-data:
+  caddy-config:

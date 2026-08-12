@@ -1,0 +1,58 @@
+# ============================================================================
+# HTTPS front door. Caddy obtains and renews the certificate by itself, which is
+# the whole reason it is here: the beacon posts from an HTTPS page and a browser
+# will not let it reach an HTTP endpoint.
+# ============================================================================
+
+{
+	email {$ACME_EMAIL}
+	# Uncomment while testing so a failed attempt does not burn the real
+	# rate limit. Certificates issued here are untrusted by design.
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# The beacon is a cross-origin POST from the storefront, so the preflight
+	# has to be answered before the real request is ever sent. Origin is pinned
+	# to the store rather than *, because this endpoint accepts writes.
+	@preflight method OPTIONS
+	handle @preflight {
+		header {
+			Access-Control-Allow-Origin "{$ALLOW_ORIGIN}"
+			Access-Control-Allow-Methods "GET, POST, PATCH, OPTIONS"
+			Access-Control-Allow-Headers "authorization, apikey, content-type, prefer, range, x-client-info"
+			Access-Control-Max-Age "86400"
+			Vary "Origin"
+		}
+		respond 204
+	}
+
+	header {
+		Access-Control-Allow-Origin "{$ALLOW_ORIGIN}"
+		Access-Control-Expose-Headers "content-range, content-location, server-timing"
+		Vary "Origin"
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+
+	# PostgREST expects to be mounted at the root, and the dashboard already
+	# builds URLs as /rest/v1/<table> because that is Supabase's layout. Strip
+	# the prefix here so neither side has to change.
+	handle /rest/v1/* {
+		uri strip_prefix /rest/v1
+		reverse_proxy rest:3000
+	}
+
+	# A single beacon page view is a few hundred bytes; nothing legitimate here
+	# is large, and a cap keeps a bad actor from streaming into the table.
+	request_body {
+		max_size 256KB
+	}
+
+	handle {
+		respond "web-monitor" 200
+	}
+}

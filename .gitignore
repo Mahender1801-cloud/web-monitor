@@ -7,3 +7,5 @@ package-lock.json
 # Playwright leftovers from a local run
 test-results/
 playwright-report/
+docker/.env
+docker/backups/
