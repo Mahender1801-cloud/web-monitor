@@ -15,9 +15,10 @@
 // stopped instead of starting over. Small reference tables are replaced whole
 // inside a transaction, because they change in place rather than only growing.
 //
-//   node scripts/db_sync.mjs             # sync everything
+//   node scripts/db_sync.mjs                 # sync everything, once
 //   node scripts/db_sync.mjs rum_events_all
-//   FULL=1 node scripts/db_sync.mjs      # ignore watermarks, re-copy from zero
+//   node scripts/db_sync.mjs --watch 60      # parallel mode: keep both sides level
+//   FULL=1 node scripts/db_sync.mjs          # ignore watermarks, re-copy from zero
 //
 // Env: CONTAINER (default wm-archive-db), PGUSER/PGDATABASE (default monitor)
 // ============================================================================
@@ -44,7 +45,13 @@ const TABLES = [
   { name: 'health_events',  mode: 'growing', key: 'id' },
   { name: 'task_checks',    mode: 'growing', key: 'id' },
   { name: 'script_audit',   mode: 'growing', key: 'id' },
-  { name: 'shop_orders',    mode: 'growing', key: 'id' },
+  // Replace, not growing. shop_orders.id is the Shopify order id, not a
+  // sequential insert id, so it does not only ever increase: a CSV backfill or
+  // an out-of-order webhook lands below the current maximum, and a keyset walk
+  // of id > last would skip that row permanently. Caught by db_verify, which
+  // found 12 Aug holding ids up to 7021213909240 upstream and 7020221694200
+  // here. 37,000 rows is cheap to re-copy and cannot drift.
+  { name: 'shop_orders',    mode: 'replace' },
   { name: 'psi_results',    mode: 'growing', key: 'id' },
   { name: 'optimize_audit', mode: 'growing', key: 'id' },
   { name: 'synthetic_runs', mode: 'growing', key: 'id' },
@@ -123,6 +130,49 @@ function csvCell(v) {
 }
 
 // ---------------------------------------------------------------------------
+// The archive is meant to be queried, not just held. Without these every
+// dashboard query is a sequential scan of the whole table — measured at 95ms
+// for a bare count over 7 days, and far worse once percentiles and group-bys
+// are involved. These mirror what the upstream database already carries, so a
+// query that is fast there is fast here.
+//
+// Created after the first copy rather than before it: maintaining an index
+// during a bulk COPY of 900,000 rows costs more than building it once at the end.
+const INDEXES = {
+  rum_events_all: [
+    // Covering index — the dashboard's window queries are answered from the
+    // index alone, without touching the table.
+    `create index if not exists ar_rum_window on public.rum_events_all (created_at desc)
+       include (lcp, inp, cls, fcp, ttfb, device, os, connection, time_on_page, ga_client_id, referrer, path)`,
+    `create index if not exists ar_rum_session on public.rum_events_all (session_id)`,
+    `create index if not exists ar_rum_gaclient on public.rum_events_all (ga_client_id)`,
+    `create index if not exists ar_rum_bot on public.rum_events_all (created_at desc) where is_bot`,
+  ],
+  health_events: [
+    `create index if not exists ar_health_created on public.health_events (created_at desc)`,
+    `create index if not exists ar_health_kind on public.health_events (kind, created_at desc)`,
+    `create index if not exists ar_health_session on public.health_events (session_id)`,
+  ],
+  funnel_events: [
+    `create index if not exists ar_funnel_created on public.funnel_events (created_at desc)`,
+    `create index if not exists ar_funnel_type on public.funnel_events (event_type, created_at desc)`,
+    `create index if not exists ar_funnel_session on public.funnel_events (session_id)`,
+  ],
+  shop_orders:    [`create index if not exists ar_orders_created on public.shop_orders (created_at desc)`],
+  task_checks:    [`create index if not exists ar_checks_created on public.task_checks (created_at desc)`],
+  script_audit:   [`create index if not exists ar_script_created on public.script_audit (created_at desc)`],
+  psi_results:    [`create index if not exists ar_psi_created on public.psi_results (created_at desc)`],
+  optimize_audit: [`create index if not exists ar_opt_created on public.optimize_audit (created_at desc)`],
+  benchmarks:     [`create index if not exists ar_bench_created on public.benchmarks (created_at desc)`],
+};
+
+function ensureIndexes(name) {
+  for (const sql of INDEXES[name] || []) {
+    try { psql(sql); }
+    catch (e) { console.error(`  (index skipped on ${name}: ${(e.message || '').split('\n')[0].slice(0, 90)})`); }
+  }
+}
+
 function ensureState() {
   psql(`create table if not exists public._sync_state (
           table_name text primary key,
@@ -189,6 +239,7 @@ async function syncGrowing(t) {
   }
   fs.existsSync(tmp) && fs.unlinkSync(tmp);
 
+  ensureIndexes(t.name);
   const total = psql(`select count(*) from public.${q(t.name)}`);
   psql(`insert into public._sync_state (table_name,last_id,rows,synced_at)
         values ('${t.name}',${last},${total},now())
@@ -198,7 +249,16 @@ async function syncGrowing(t) {
 }
 
 async function syncReplace(t) {
-  const rows = await fetchJson(`${t.name}?select=*&limit=10000`);
+  // Paginate. PostgREST caps a response at 1000 rows whatever limit is asked
+  // for, so the old single request with limit=10000 silently returned 1000 and
+  // called it the whole table. It went unnoticed only because every table using
+  // this path had fewer than 1000 rows — shop_orders has 37,000.
+  const rows = [];
+  for (let off = 0; ; off += PAGE) {
+    const pg = await fetchJson(`${t.name}?select=*&order=id.asc&offset=${off}&limit=${PAGE}`);
+    rows.push(...pg);
+    if (pg.length < PAGE) break;
+  }
   if (!rows.length) { console.log(`  ${t.name}: empty upstream`); return; }
   const cols = ensureTable(t.name, rows.slice(0, 50));
   const tmp = path.join(os.tmpdir(), `sync_${t.name}_${process.pid}.csv`);
@@ -213,6 +273,7 @@ async function syncReplace(t) {
         alter table public.${q(t.name + '_stage')} rename to ${q(t.name)};
         commit;`);
   fs.unlinkSync(tmp);
+  ensureIndexes(t.name);
   psql(`insert into public._sync_state (table_name,rows,synced_at)
         values ('${t.name}',${rows.length},now())
         on conflict (table_name) do update set rows=excluded.rows, synced_at=now()`);
@@ -220,7 +281,15 @@ async function syncReplace(t) {
 }
 
 // ---------------------------------------------------------------------------
-const only = process.argv[2];
+// --watch keeps the archive alongside Supabase instead of behind it, which is
+// what the parallel run needs: both sides holding the same rows, in the same
+// order, so any divergence shows up within a minute instead of a day.
+const argv = process.argv.slice(2);
+const wi = argv.indexOf('--watch');
+const WATCH = wi > -1;
+const EVERY = WATCH ? Math.max(30, Number(argv[wi + 1]) || 60) : 0;
+
+const only = argv.filter(a => !a.startsWith('--') && a !== String(EVERY))[0];
 const list = only ? TABLES.filter(t => t.name === only) : TABLES;
 if (only && !list.length) { console.error(`unknown table: ${only}`); process.exit(1); }
 
@@ -228,13 +297,48 @@ try { psql('select 1'); }
 catch { console.error(`cannot reach container "${CONTAINER}". Start it with:\n  docker compose -f docker/docker-compose.yml up -d`); process.exit(1); }
 
 ensureState();
-console.log(`syncing ${list.length} table(s) into ${CONTAINER}${FULL ? ' (FULL re-copy)' : ''}\n`);
-const t0 = Date.now();
-for (const t of list) {
-  try { t.mode === 'growing' ? await syncGrowing(t) : await syncReplace(t); }
-  catch (e) { console.error(`  ${t.name}: FAILED — ${(e.message || e).slice(0, 200)}`); }
+
+async function onePass(quiet) {
+  const t0 = Date.now();
+  let added = 0, failed = 0;
+  for (const t of list) {
+    const before = quiet ? Number(psql(`select count(*) from public.${q(t.name)}`) || 0) : 0;
+    try {
+      t.mode === 'growing' ? await syncGrowing(t) : await syncReplace(t);
+      if (quiet) added += Number(psql(`select count(*) from public.${q(t.name)}`) || 0) - before;
+    } catch (e) {
+      failed++;
+      console.error(`  ${t.name}: FAILED — ${(e.message || e).slice(0, 200)}`);
+    }
+  }
+  return { secs: Math.round((Date.now() - t0) / 1000), added, failed };
 }
-console.log(`\ndone in ${Math.round((Date.now() - t0) / 1000)}s`);
-console.log(psql(`select table_name, coalesce(rows,0) rows, to_char(synced_at,'HH24:MI:SS') at
-                  from public._sync_state order by rows desc`)
-  .split('\n').filter(Boolean).map(l => '  ' + l.split('|').join('  ')).join('\n'));
+
+if (!WATCH) {
+  console.log(`syncing ${list.length} table(s) into ${CONTAINER}${FULL ? ' (FULL re-copy)' : ''}\n`);
+  const r = await onePass(false);
+  console.log(`\ndone in ${r.secs}s`);
+  console.log(psql(`select table_name, coalesce(rows,0) rows, to_char(synced_at,'HH24:MI:SS') at
+                    from public._sync_state order by rows desc`)
+    .split('\n').filter(Boolean).map(l => '  ' + l.split('|').join('  ')).join('\n'));
+} else {
+  // Parallel mode. A failure is logged and the loop continues: a blip upstream
+  // must not end a run that is meant to last a day, and because each pass
+  // resumes from max(id), nothing is skipped by having failed once.
+  console.log(`watching — syncing ${list.length} table(s) every ${EVERY}s. Ctrl-C to stop.\n`);
+  let passes = 0, totalFailed = 0;
+  const stop = () => {
+    console.log(`\nstopped after ${passes} passes, ${totalFailed} failed table-syncs.`);
+    process.exit(0);
+  };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+  for (;;) {
+    const r = await onePass(true);
+    passes++; totalFailed += r.failed;
+    console.log(`  ${new Date().toLocaleTimeString('en-IN', { hour12: false })}  ` +
+                `pass ${passes}: +${r.added.toLocaleString()} rows in ${r.secs}s` +
+                (r.failed ? `  (${r.failed} table(s) failed)` : ''));
+    await new Promise(s => setTimeout(s, EVERY * 1000));
+  }
+}
