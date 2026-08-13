@@ -11,6 +11,26 @@
 -- deleting the table; here the grants do the same job. No UPDATE, no DELETE, no
 -- TRUNCATE, to any role the public can reach.
 --
+-- DO NOT ENABLE THIS WHILE db_sync.mjs IS COPYING INTO THE SAME TABLES.
+--
+-- The two write paths do not compose. db_sync inserts Supabase's rows carrying
+-- Supabase's ids; a browser insert takes an id from the local sequence created
+-- below. Point both at one table and you get the same page view stored twice —
+-- once copied, once received — and eventually two rows claiming one id. The
+-- archive would then disagree with Supabase in a way db_verify.mjs correctly
+-- reports as a gap, and the numbers on the dashboard would quietly inflate.
+--
+-- So pick one per table:
+--
+--   Comparing the two databases (what works today, no hosting needed):
+--     leave this file unapplied. db_sync.mjs --watch keeps the archive level
+--     with Supabase and db_verify.mjs proves they agree.
+--
+--   Testing that Docker can RECEIVE the beacon (needs the public HTTPS host):
+--     apply this, and stop syncing these three tables — run db_sync.mjs with an
+--     explicit table name for the others. Then compare per-day counts between
+--     what Supabase received and what this received over the same hours.
+--
 -- Runs automatically on a fresh volume. On an existing one, apply it by hand:
 --   docker exec -i wm-archive-db psql -U monitor -d monitor \
 --     < docker/init/02-ingest-grants.sql
