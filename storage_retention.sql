@@ -265,11 +265,22 @@ grant execute on function public.rum_prune(int) to anon;
 -- behind this table, so whatever is deleted here exists only in the Docker
 -- archive afterwards. That is the whole point of copying it there first.
 --
--- The keep window is shorter than for rum_events on purpose: the dashboard's
--- error views look at the last 7 days, and an error that stopped three weeks
--- ago is history, not an alert.
+-- 7 days, and the number is measured rather than chosen. With the archive
+-- loaded locally the whole plan could be costed exactly, projecting from the
+-- last 14 days of real traffic and applying the new per-session dedupe:
+--
+--     health kept    health      rum (14d, raw 3d)    total incl. other tables
+--        7 days      119 MB           170 MB                 349 MB
+--       10 days      171 MB           170 MB                 400 MB
+--       14 days      239 MB           170 MB                 469 MB
+--       21 days      358 MB           170 MB                 588 MB
+--
+-- The free tier is 500 MB. 7 days lands at 349 MB with real headroom, and 21
+-- days does not fit at all. Nothing is lost by choosing it: error_diagnosis.sql
+-- already only looks back 7 days, so this deletes rows no view was reading —
+-- and the Docker archive keeps them all anyway.
 -- ---------------------------------------------------------------------------
-create or replace function public.health_prune(p_keep_days int default 21)
+create or replace function public.health_prune(p_keep_days int default 7)
 returns bigint language plpgsql
 set statement_timeout = '300s'
 as $$
@@ -283,14 +294,14 @@ grant execute on function public.health_prune(int) to anon;
 
 -- Check what it would remove, and confirm the archive already has it:
 --   select created_at::date d, count(*) from public.health_events
---   where created_at < now() - interval '21 days' group by 1 order by 1;
+--   where created_at < now() - interval '7 days' group by 1 order by 1;
 --
 -- Against the archive (psql on the container), the same range must be present:
 --   docker exec wm-archive-db psql -U monitor -d monitor -c \
 --     "select min(created_at)::date, max(created_at)::date, count(*) from health_events"
 --
 -- Then:
---   select public.health_prune(21);
+--   select public.health_prune(7);
 --   vacuum full public.health_events;
 
 
