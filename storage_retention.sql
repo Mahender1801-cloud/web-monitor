@@ -203,12 +203,17 @@ grant execute on function public.qa_day(date) to anon;
 -- Safe because the insert trigger reads raw only at insert time, and is_bot is
 -- already stored on every one of these rows. What is lost is the ability to
 -- re-run bot classification over history — the classification itself survives.
+--
+-- COMMENTED OUT DELIBERATELY. Everything above this line can be pasted and run
+-- as a block with no risk; this cannot. Uncomment it only after
+-- `node scripts/db_sync.mjs` has copied these rows into the Docker archive,
+-- because once raw is emptied here it exists nowhere else.
 -- ---------------------------------------------------------------------------
-update public.rum_events_all
-set raw = null
-where created_at < now() - interval '3 days' and raw is not null;
-
-vacuum full public.rum_events_all;   -- returns the freed pages to the OS
+-- update public.rum_events_all
+-- set raw = null
+-- where created_at < now() - interval '3 days' and raw is not null;
+--
+-- vacuum full public.rum_events_all;   -- returns the freed pages to the OS
 
 
 -- ---------------------------------------------------------------------------
