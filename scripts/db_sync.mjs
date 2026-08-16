@@ -57,7 +57,9 @@ const TABLES = [
   { name: 'synthetic_runs', mode: 'growing', key: 'id' },
   { name: 'alerts',         mode: 'growing', key: 'id' },
   { name: 'benchmarks',     mode: 'growing', key: 'id' },
-  { name: 'rum_daily',      mode: 'replace' },
+  // order names the column paging sorts by. It defaults to id, which every
+  // table here has except rum_daily — its primary key is the date.
+  { name: 'rum_daily',      mode: 'replace', order: 'd' },
   { name: 'monitors',       mode: 'replace' },
   { name: 'task_items',     mode: 'replace' },
 ];
@@ -253,9 +255,12 @@ async function syncReplace(t) {
   // for, so the old single request with limit=10000 silently returned 1000 and
   // called it the whole table. It went unnoticed only because every table using
   // this path had fewer than 1000 rows — shop_orders has 37,000.
+  // A stable sort is what makes offset paging safe — without one the server may
+  // return a row twice and skip another across pages.
   const rows = [];
   for (let off = 0; ; off += PAGE) {
-    const pg = await fetchJson(`${t.name}?select=*&order=id.asc&offset=${off}&limit=${PAGE}`);
+    const pg = await fetchJson(
+      `${t.name}?select=*&order=${t.order || 'id'}.asc&offset=${off}&limit=${PAGE}`);
     rows.push(...pg);
     if (pg.length < PAGE) break;
   }
