@@ -14,15 +14,24 @@ create role anon           nologin;
 create role authenticated  nologin;
 create role service_role   nologin bypassrls;
 
-grant usage on schema public to web_anon, anon, authenticated, service_role;
+-- web_anon and anon are the roles an unauthenticated request lands on, and the
+-- moment this database is reachable from the internet — a Cloudflare tunnel for
+-- the parallel run, or a real host later — they are what the public gets.
+--
+-- They are deliberately given nothing in public. That schema holds the archive:
+-- every page view, every order, the whole history. This was originally granted
+-- SELECT for convenience, and the first time a tunnel was pointed at PostgREST
+-- the entire archive answered 200 to an anonymous GET from the open internet.
+-- Convenience is not worth that; the dashboard, when it is pointed here, will
+-- authenticate.
+grant usage on schema public to authenticated, service_role;
 
--- Whatever the sync creates later should be readable without re-granting by hand.
-alter default privileges in schema public
-  grant select on tables to web_anon, anon, authenticated;
 alter default privileges in schema public
   grant all on tables to service_role;
 alter default privileges in schema public
-  grant usage, select on sequences to web_anon, anon, authenticated, service_role;
+  grant select on tables to authenticated;
+alter default privileges in schema public
+  grant usage, select on sequences to authenticated, service_role;
 
 grant web_anon, anon, authenticated, service_role to monitor;
 

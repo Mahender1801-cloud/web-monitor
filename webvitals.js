@@ -6,6 +6,41 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const ENDPOINT      = SUPABASE_URL + '/rest/v1/rum_events';
 const FUNNEL_ENDPOINT = SUPABASE_URL + '/rest/v1/funnel_events';
 
+// ---------------------------------------------------------------------------
+// Parallel run. Set this to the Docker endpoint and every beacon is sent to
+// both, so the two databases can be compared on the same live traffic before
+// anything is switched over. Empty means off, and off costs nothing: mirror()
+// returns on the first line and no second request is ever made.
+//
+// The copy goes to a shadow schema, never to the archive tables — the archive
+// is filled by db_sync.mjs from Supabase, and letting the browser write there
+// too would store every page view twice and collide on ids.
+//
+// It is never awaited and its failures are swallowed. If Docker is down, or the
+// tunnel has changed hostname, the shopper's page must not notice and the
+// Supabase write must still happen. That is why the mirror is issued after the
+// real send, not before it.
+const SHADOW_URL = '';   // e.g. 'https://something.trycloudflare.com'
+
+function mirror(table, body) {
+  if (!SHADOW_URL) return;
+  try {
+    fetch(SHADOW_URL + '/' + table, {
+      method: 'POST',
+      keepalive: true,
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Profile': 'shadow',
+        'Prefer': 'return=minimal'
+      },
+      // Wrapped, because the shadow tables store the payload whole as jsonb.
+      // Typed columns there would need guesses, and a guess that rejected a
+      // field would look like Docker losing data when it was the schema at fault.
+      body: JSON.stringify({ payload: JSON.parse(body) })
+    }).catch(() => {});
+  } catch {}
+}
+
 const ua = navigator.userAgent;
 const round = n => (typeof n === 'number' ? Math.round(n) : null);
 // One id per browser tab visit, reused across pages in the same visit (sessionStorage),
@@ -93,13 +128,15 @@ function stampOnce() {
 // ============================================================================
 function sendEvent(type) {
   try {
+    const body = JSON.stringify({ session_id: sessionId, event_type: type, path: location.pathname,
+                                  ga_client_id: gaClientId, referrer: document.referrer || '' });
     fetch(FUNNEL_ENDPOINT, {
       method: 'POST', keepalive: true,
       headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY,
                  'Authorization': 'Bearer ' + SUPABASE_ANON_KEY, 'Prefer': 'return=minimal' },
-      body: JSON.stringify({ session_id: sessionId, event_type: type, path: location.pathname,
-                             ga_client_id: gaClientId, referrer: document.referrer || '' })
+      body
     }).catch(() => {});
+    mirror('funnel_events', body);
   } catch {}
 }
 
@@ -217,16 +254,18 @@ function sendHealth(kind, detail, extra) {
   if (!healthIsNew(kind + '|' + String(detail || '').replace(/[?#].*$/, '').slice(0, 80))) return;
   healthSent++;
   try {
+    const body = JSON.stringify(Object.assign({
+      session_id: sessionId, kind, path: location.pathname,
+      detail: String(detail || '').slice(0, 300),
+      browser, os, device: /Mobi/i.test(ua) ? 'mobile' : 'desktop'
+    }, extra || {}));
     fetch(HEALTH_ENDPOINT, {
       method: 'POST', keepalive: true,
       headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY,
                  'Authorization': 'Bearer ' + SUPABASE_ANON_KEY, 'Prefer': 'return=minimal' },
-      body: JSON.stringify(Object.assign({
-        session_id: sessionId, kind, path: location.pathname,
-        detail: String(detail || '').slice(0, 300),
-        browser, os, device: /Mobi/i.test(ua) ? 'mobile' : 'desktop'
-      }, extra || {}))
+      body
     }).catch(() => {});
+    mirror('health_events', body);
   } catch {}
 }
 
@@ -348,6 +387,7 @@ function flush() {
     },
     body
   }).catch(() => {});
+  mirror('rum_events', body);
 }
 
 onLCP(record); onCLS(record); onINP(record); onFCP(record); onTTFB(record);

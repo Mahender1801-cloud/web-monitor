@@ -68,7 +68,11 @@ services:
         condition: service_healthy
     environment:
       PGRST_DB_URI: postgres://monitor:${PGPASSWORD:-monitor_local_dev}@db:5432/monitor
-      PGRST_DB_SCHEMAS: public
+      # public is the archive (read); shadow is where the browser writes during
+      # the parallel run (insert only). Both are served, and a request picks one
+      # with the Accept-Profile / Content-Profile header — so the beacon can be
+      # aimed at shadow without being able to touch the archive.
+      PGRST_DB_SCHEMAS: "public,shadow"
       PGRST_DB_ANON_ROLE: web_anon
       PGRST_OPENAPI_SERVER_PROXY_URI: http://localhost:3001
       # Bound the damage a runaway query can do, and match the row cap the
@@ -77,6 +81,26 @@ services:
       PGRST_DB_POOL: 10
     ports:
       - "3001:3000"
+
+  # Free public HTTPS for the parallel run, with no VPS, no card and no port
+  # forwarding. Started on demand rather than with the stack:
+  #
+  #   docker compose -f docker/docker-compose.yml --profile parallel up -d tunnel
+  #   docker logs wm-tunnel 2>&1 | grep -o 'https://.*trycloudflare.com'
+  #
+  # A quick tunnel's hostname is random and changes every restart, which is
+  # tolerable for a day of shadow traffic and not for anything permanent. It
+  # also puts PostgREST on the open internet, so what the anonymous role can
+  # reach matters more here than anywhere else — see 01-roles.sql, which gives
+  # it nothing in public and INSERT only in shadow.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: wm-tunnel
+    profiles: ["parallel"]
+    restart: unless-stopped
+    depends_on:
+      - rest
+    command: tunnel --no-autoupdate --url http://rest:3000
 
 volumes:
   archive-data:
