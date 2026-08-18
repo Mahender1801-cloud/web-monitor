@@ -20,7 +20,8 @@
 //   node scripts/serp.mjs              # spend up to DAILY keywords
 //   node scripts/serp.mjs "blue light glasses"    # one keyword, on demand
 //
-// Env: one of SERPAPI_KEY / SERPER_KEY / SCRAPINGDOG_KEY,
+// Env: nothing required — Brave is used free by default.
+//      Optional: SERPAPI_KEY / SERPER_KEY / SCRAPINGDOG_KEY for Google results,
 //      SUPABASE_URL, SUPABASE_SERVICE_KEY, SERP_DAILY (default 8)
 // ============================================================================
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -57,7 +58,48 @@ const PROVIDERS = [
   },
 ];
 
-const provider = PROVIDERS.find(p => p.key);
+// ---------------------------------------------------------------------------
+// The no-key option, and the reason this feature can run without a budget.
+//
+// Google is closed: it answers /sorry/index with a CAPTCHA on the first request
+// from this machine, and getting past that is what the paid APIs are selling.
+// Brave is not. It runs its own index — not a Google or Bing mirror — and its
+// results page answers plain HTTP from here with 20 organic results.
+//
+// Measured, not assumed: three requests in quick succession earn a 429, and at
+// roughly one a minute it alternates between answering and refusing. So this
+// treats 429 as "wait longer", never as failure, and hands the keyword back to
+// be retried. About one keyword a minute is the sustainable rate, which is a
+// few hours for a hundred keywords — fine for something that runs overnight.
+//
+// This reads their results page rather than their paid API. Keeping the volume
+// low and backing off properly is the difference between a courteous client and
+// a scraper that deserves to be blocked.
+const BRAVE = {
+  name: 'brave', key: 'nokey', cap: 100000, free: true, minGapMs: 60000,
+  url: (q) => `https://search.brave.com/search?q=${encodeURIComponent(q)}`,
+  init: () => ({ headers: {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Accept-Language': 'en-IN,en;q=0.9',
+    'Accept': 'text/html,application/xhtml+xml'
+  } }),
+  html: true,
+  parse: (h) => {
+    const out = [];
+    const re = /<div class="snippet[^"]*"\s+data-pos="(\d+)"\s+data-type="web"[\s\S]{0,600}?<a href="(https?:\/\/[^"]+)"/g;
+    let m;
+    while ((m = re.exec(h))) out.push({ slot: +m[1], url: m[2], title: '' });
+
+    // Rank is the position among organic results, counted here — NOT data-pos.
+    // data-pos is Brave's slot index across every block on the page, including
+    // clusters and other non-organic panels, so it skips numbers: one page gave
+    // web results at slots 1,2,5,6,7,…  Storing those as ranks would have said
+    // a site was 5th when it was 3rd, on every keyword, silently.
+    return out.map((r, i) => ({ position: i + 1, url: r.url, title: r.title, slot: r.slot }));
+  }
+};
+
+const provider = PROVIDERS.find(p => p.key) || (process.env.NO_BRAVE ? null : BRAVE);
 if (!provider) {
   console.log('No SERP provider key set. This step is optional — Search Console');
   console.log('already gives your own rankings for free, and this only adds who');
@@ -98,6 +140,10 @@ const sb = async (path, opts = {}) => fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
 });
 
 async function takeBudget() {
+  // A free provider has no monthly allowance to protect, so the ledger is
+  // skipped rather than filled with meaningless numbers. Its limit is a rate,
+  // and that is handled by backing off in fetchSerp.
+  if (provider.free || !HAS_DB) return true;
   const r = await sb('rpc/serp_budget_take', {
     method: 'POST',
     body: JSON.stringify({ p_provider: provider.name, p_cap: provider.cap, p_n: 1 })
@@ -106,17 +152,37 @@ async function takeBudget() {
   return (await r.json()) === true;
 }
 
-async function fetchSerp(keyword) {
+// 429 means "slow down", not "this keyword failed". Treating the two the same
+// would drop keywords that were never actually checked and quietly leave holes
+// in the tracking. So a throttle is retried with a growing wait, and only a real
+// error gives up.
+async function fetchSerp(keyword, attempt = 0) {
   const init = provider.post
     ? { method: 'POST', ...provider.post(keyword) }
-    : { method: 'GET' };
-  const r = await fetch(provider.url(keyword), { ...init, signal: AbortSignal.timeout(45000) });
-  if (!r.ok) throw new Error(`${provider.name} ${r.status}: ${(await r.text()).slice(0, 140)}`);
-  const j = await r.json();
-  const rows = provider.parse(j).filter(x => x && x.url && x.position);
-  if (!rows.length) throw new Error(`${provider.name} returned no organic results`);
+    : { method: 'GET', ...(provider.init ? provider.init() : {}) };
+  const r = await fetch(provider.url(keyword), { ...init, signal: AbortSignal.timeout(45000) })
+    .catch(() => null);
+
+  if (!r || r.status === 429 || r.status === 503) {
+    if (attempt >= 4) throw new Error(`${provider.name} kept throttling after 5 attempts`);
+    const wait = 45000 * (attempt + 1) + Math.random() * 15000;
+    console.log(`     throttled, waiting ${Math.round(wait / 1000)}s`);
+    await new Promise(s => setTimeout(s, wait));
+    return fetchSerp(keyword, attempt + 1);
+  }
+  if (!r.ok) throw new Error(`${provider.name} ${r.status}`);
+
+  const body = provider.html ? await r.text() : await r.json();
+  const rows = provider.parse(body).filter(x => x && x.url && x.position);
+  if (!rows.length) {
+    // An empty page from a 200 is usually the markup having moved, which is a
+    // parser problem and not a keyword with no results. Say which.
+    throw new Error(`${provider.name} returned 200 but nothing parsed — page markup may have changed`);
+  }
   return rows.slice(0, 10);
 }
+
+const HAS_DB = !!(SUPABASE_URL && SERVICE_KEY);
 
 async function save(keyword, rows) {
   const payload = rows.map(r => {
@@ -127,6 +193,9 @@ async function save(keyword, rows) {
       is_us: domain.includes(OUR_DOMAIN), provider: provider.name, country: COUNTRY
     };
   });
+  // Running without credentials is a legitimate way to try a keyword by hand,
+  // so it prints instead of failing.
+  if (!HAS_DB) return payload;
   const r = await sb('serp_results', { method: 'POST', headers: { Prefer: 'return=minimal' },
                                        body: JSON.stringify(payload) });
   if (!r.ok) throw new Error(`save failed ${r.status}: ${(await r.text()).slice(0, 160)}`);
@@ -178,12 +247,17 @@ for (const k of keywords) {
   } catch (e) {
     console.error(`  ${kw}: ${(e.message || e).slice(0, 140)}`);
   }
-  // Free tiers are usually rate limited to about one call a second; going
-  // faster gets 429s that still count against the allowance.
-  await new Promise(s => setTimeout(s, 1500));
+  // Metered providers limit to about a call a second; Brave wants about a
+  // minute. Going faster earns 429s which, on a paid tier, still spend credit.
+  const gap = provider.minGapMs || 1500;
+  await new Promise(s => setTimeout(s, gap + Math.random() * gap * 0.4));
 }
 
 console.log(`\n${done}/${spent} checked successfully.`);
-const b = await sb(`serp_budget?provider=eq.${provider.name}&select=used,monthly_cap&order=month.desc&limit=1`);
-if (b.ok) { const j = await b.json();
-  if (j[0]) console.log(`budget this month: ${j[0].used}/${j[0].monthly_cap} used`); }
+if (HAS_DB && !provider.free) {
+  const b = await sb(`serp_budget?provider=eq.${provider.name}&select=used,monthly_cap&order=month.desc&limit=1`);
+  if (b.ok) { const j = await b.json();
+    if (j[0]) console.log(`budget this month: ${j[0].used}/${j[0].monthly_cap} used`); }
+} else if (!HAS_DB) {
+  console.log('(no Supabase credentials — printed only, nothing saved)');
+}
