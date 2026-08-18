@@ -35,11 +35,60 @@ const COUNTRY      = process.env.SERP_COUNTRY || 'in';
 // charging, and neither belongs in a system that has to cost nothing.
 const PROVIDERS = [
   {
-    name: 'serpapi', key: process.env.SERPAPI_KEY, cap: 250,
+    name: 'serpapi', key: process.env.SERPAPI_KEY, cap: 250, google: true,
     url: (q) => `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q)}` +
                 `&gl=${COUNTRY}&hl=en&num=10&api_key=${process.env.SERPAPI_KEY}`,
     parse: (j) => (j.organic_results || []).map(r => ({
-      position: r.position, url: r.link, title: r.title }))
+      position: r.position, url: r.link, title: r.title })),
+
+    // Everything on the page that is not an organic result. One request already
+    // paid for returns all of it, so not reading it would waste the call — and
+    // paid pressure is the part organic tracking cannot see at all.
+    features: (j) => {
+      const out = [];
+      const push = (kind, o) => out.push({ kind, ...o });
+
+      for (const a of [...(j.ads || []), ...(j.shopping_results || [])])
+        push('ad', { position: a.position ?? a.block_position ?? null,
+                     title: a.title, url: a.link || a.tracking_link,
+                     body: a.description || a.snippet || a.source || null,
+                     extra: { price: a.price ?? null, source: a.source ?? null,
+                              sitelinks: a.sitelinks ?? null } });
+
+      for (const q of (j.related_questions || []))
+        push('paa', { title: q.question, url: q.link || null,
+                      body: q.snippet || q.answer || null,
+                      extra: { source: q.title ?? null } });
+
+      for (const [i, s] of (j.related_searches || []).entries())
+        push('related', { position: i + 1, title: s.query, url: s.link || null });
+
+      if (j.knowledge_graph) {
+        const k = j.knowledge_graph;
+        push('knowledge', { title: k.title, url: k.website || k.source?.link || null,
+                            body: k.description || null,
+                            extra: { type: k.type ?? null, rating: k.rating ?? null } });
+      }
+
+      if (j.ai_overview)
+        push('ai_overview', {
+          body: (j.ai_overview.text_blocks || [])
+                  .map(b => b.snippet || (b.list || []).map(x => x.snippet).join(' ')).join('\n')
+                  .slice(0, 4000) || null,
+          extra: { references: (j.ai_overview.references || []).map(r => r.link).slice(0, 20) } });
+
+      for (const [i, l] of (j.local_results?.places || j.local_results || []).entries())
+        push('local', { position: l.position ?? i + 1, title: l.title,
+                        url: l.links?.website || l.website || null,
+                        body: l.address || null,
+                        extra: { rating: l.rating ?? null, reviews: l.reviews ?? null } });
+
+      for (const [i, n] of (j.news_results || []).entries())
+        push('news', { position: n.position ?? i + 1, title: n.title, url: n.link,
+                       body: n.snippet || null, extra: { source: n.source ?? null,
+                                                         date: n.date ?? null } });
+      return out;
+    }
   },
   {
     name: 'serper', key: process.env.SERPER_KEY, cap: 2500,
@@ -173,6 +222,7 @@ async function fetchSerp(keyword, attempt = 0) {
   if (!r.ok) throw new Error(`${provider.name} ${r.status}`);
 
   const body = provider.html ? await r.text() : await r.json();
+  lastBody = body;
   const rows = provider.parse(body).filter(x => x && x.url && x.position);
   if (!rows.length) {
     // An empty page from a 200 is usually the markup having moved, which is a
@@ -183,6 +233,35 @@ async function fetchSerp(keyword, attempt = 0) {
 }
 
 const HAS_DB = !!(SUPABASE_URL && SERVICE_KEY);
+
+// The response of the call just made, so the ad / PAA / knowledge blocks can be
+// read from the same request the organic results came from. Re-fetching to get
+// them would double the cost of every keyword against a 250-a-month allowance.
+let lastBody = null;
+
+async function saveFeatures(keyword) {
+  if (!provider.features || !lastBody) return null;
+  let rows;
+  try { rows = provider.features(lastBody); }
+  catch (e) { console.error(`     features unreadable: ${(e.message||e).slice(0,80)}`); return null; }
+  if (!rows.length) return null;
+  const payload = rows.map(r => {
+    const d = r.url ? domainOf(r.url) : '';
+    return { keyword, kind: r.kind, position: r.position ?? null,
+             title: (r.title || '').slice(0, 300), url: r.url || null,
+             domain: d || null, brand: d ? brandOf(d) : null,
+             body: (r.body || '').slice(0, 4000) || null,
+             extra: r.extra ?? null, provider: provider.name };
+  });
+  const byKind = {};
+  for (const r of rows) byKind[r.kind] = (byKind[r.kind] || 0) + 1;
+  if (HAS_DB) {
+    const res = await sb('serp_features', { method: 'POST', headers: { Prefer: 'return=minimal' },
+                                            body: JSON.stringify(payload) });
+    if (!res.ok) { console.error(`     features save failed ${res.status}`); return null; }
+  }
+  return byKind;
+}
 
 async function save(keyword, rows) {
   const payload = rows.map(r => {
@@ -236,10 +315,12 @@ for (const k of keywords) {
   try {
     const rows = await fetchSerp(kw);
     const saved = await save(kw, rows);
+    const nf = await saveFeatures(kw);
     const us = saved.find(x => x.is_us);
     const top = saved.slice(0, 5).map(x => `${x.position}.${x.brand}`).join('  ');
     console.log(`  ${kw}`);
     console.log(`     ${top}`);
+    if (nf) console.log(`     page: ${Object.entries(nf).map(([k, n]) => `${n} ${k}`).join(', ')}`);
     console.log(`     us: ${us ? '#' + us.position : 'not in top 10'}` +
                 (k.impressions ? `   (${Number(k.impressions).toLocaleString()} impressions/28d` +
                                  `${k.position ? `, GSC avg pos ${k.position}` : ''})` : ''));

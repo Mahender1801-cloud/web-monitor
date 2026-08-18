@@ -189,3 +189,61 @@ grant execute on function public.serp_share_of_voice(int) to anon;
 --   select public.serp_share_of_voice(30);
 --   select provider, month, used, monthly_cap from public.serp_budget;
 -- ---------------------------------------------------------------------------
+
+-- ============================================================================
+-- Rich SERP features — everything on the page that is not an organic result.
+-- Appended after the first version; run this part if serp.sql was already run.
+--
+-- These come only from a provider with real Google access. Brave's results page
+-- carries none of them, so rows here exist for keywords checked through
+-- SerpApi/Serper and not for the free Brave sweep. That is why they live in
+-- their own table rather than as nullable columns on serp_results: a missing ad
+-- block should read as "not measured for this keyword", never as "no ads ran".
+-- ============================================================================
+create table if not exists public.serp_features (
+  id         bigint generated always as identity primary key,
+  checked_at timestamptz not null default now(),
+  keyword    text not null,
+  kind       text not null,     -- ad | paa | related | knowledge | ai_overview | local | news
+  position   integer,           -- rank within its own block, where ordered
+  title      text,
+  url        text,
+  domain     text,
+  brand      text,
+  body       text,              -- ad copy, PAA answer, KG fact, AI overview text
+  extra      jsonb,             -- rating, reviews, price, sitelinks — shape varies
+  provider   text
+);
+create index if not exists serpf_kw   on public.serp_features (keyword, checked_at desc);
+create index if not exists serpf_kind on public.serp_features (kind, checked_at desc);
+
+-- Who is buying ads against the terms this shop ranks for. Paid pressure is the
+-- thing organic tracking cannot see, and it moves faster than rankings do.
+create or replace function public.serp_ad_competitors(p_days int default 30)
+returns json language plpgsql stable
+set statement_timeout = '20s'
+as $$
+declare result json;
+begin
+  with latest as (
+    select distinct on (keyword, domain) keyword, domain, brand, position, body, checked_at
+    from public.serp_features
+    where kind = 'ad' and checked_at > now() - make_interval(days => p_days)
+    order by keyword, domain, checked_at desc
+  )
+  select json_build_object(
+    'days', p_days,
+    'keywords_with_ads', (select count(distinct keyword) from latest),
+    'advertisers', (
+      select coalesce(json_agg(json_build_array(brand, kws, avg_pos, sample) order by kws desc), '[]'::json)
+      from (
+        select coalesce(brand, domain) brand,
+               count(distinct keyword) kws,
+               round(avg(position), 1) avg_pos,
+               (array_agg(body order by checked_at desc))[1] sample
+        from latest group by 1 limit 25
+      ) t)
+  ) into result;
+  return result;
+end $$;
+grant execute on function public.serp_ad_competitors(int) to anon;
