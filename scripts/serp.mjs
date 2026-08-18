@@ -1,0 +1,189 @@
+// ============================================================================
+// serp.mjs — who else ranks for the keywords this shop earns from.
+//
+// Search Console gives your own position for free and forever. It cannot tell
+// you who is above you, because it only reports your own property. That needs a
+// real search per keyword, and every provider meters it.
+//
+// So this is built around the meter rather than pretending it isn't there:
+//
+//   * every call is taken from a monthly ledger in Postgres, and the run stops
+//     when the month is spent. Without that, the first run burns the allowance
+//     and every later one silently returns nothing — which on a dashboard looks
+//     identical to "our rankings collapsed".
+//   * keywords are rotated by serp_next_keywords(), weighted toward terms near
+//     page one and away from ones checked recently, so a small budget still
+//     covers the set over time instead of re-reading the same head terms.
+//   * providers are pluggable, because free tiers change. Set whichever key you
+//     have; the parsing differences are handled here.
+//
+//   node scripts/serp.mjs              # spend up to DAILY keywords
+//   node scripts/serp.mjs "blue light glasses"    # one keyword, on demand
+//
+// Env: one of SERPAPI_KEY / SERPER_KEY / SCRAPINGDOG_KEY,
+//      SUPABASE_URL, SUPABASE_SERVICE_KEY, SERP_DAILY (default 8)
+// ============================================================================
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY;
+const DAILY        = Number(process.env.SERP_DAILY || 8);
+const OUR_DOMAIN   = (process.env.OUR_DOMAIN || 'hashtageyewears.com').toLowerCase();
+const COUNTRY      = process.env.SERP_COUNTRY || 'in';
+
+// Monthly caps are the published free allowances. They are deliberately
+// conservative: overshooting a free tier either fails the call or starts
+// charging, and neither belongs in a system that has to cost nothing.
+const PROVIDERS = [
+  {
+    name: 'serpapi', key: process.env.SERPAPI_KEY, cap: 250,
+    url: (q) => `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q)}` +
+                `&gl=${COUNTRY}&hl=en&num=10&api_key=${process.env.SERPAPI_KEY}`,
+    parse: (j) => (j.organic_results || []).map(r => ({
+      position: r.position, url: r.link, title: r.title }))
+  },
+  {
+    name: 'serper', key: process.env.SERPER_KEY, cap: 2500,
+    url: () => 'https://google.serper.dev/search',
+    post: (q) => ({ headers: { 'X-API-KEY': process.env.SERPER_KEY, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ q, gl: COUNTRY, hl: 'en', num: 10 }) }),
+    parse: (j) => (j.organic || []).map(r => ({
+      position: r.position, url: r.link, title: r.title }))
+  },
+  {
+    name: 'scrapingdog', key: process.env.SCRAPINGDOG_KEY, cap: 1000,
+    url: (q) => `https://api.scrapingdog.com/google?api_key=${process.env.SCRAPINGDOG_KEY}` +
+                `&query=${encodeURIComponent(q)}&country=${COUNTRY}&results=10`,
+    parse: (j) => (j.organic_results || j.organic_data || []).map(r => ({
+      position: r.rank || r.position, url: r.link, title: r.title }))
+  },
+];
+
+const provider = PROVIDERS.find(p => p.key);
+if (!provider) {
+  console.log('No SERP provider key set. This step is optional — Search Console');
+  console.log('already gives your own rankings for free, and this only adds who');
+  console.log('else is on the page.\n');
+  console.log('Free allowances, recurring, no card, as of Aug 2026:');
+  console.log('  SERPAPI_KEY      250 searches/month   serpapi.com');
+  console.log('  SERPER_KEY       2,500 one-time       serper.dev');
+  console.log('  SCRAPINGDOG_KEY  1,000 one-time       scrapingdog.com');
+  console.log('\nWith 250/month and SERP_DAILY=8, the budget lasts the month and');
+  console.log('covers roughly 250 keyword checks — rotated, not the same 8 daily.');
+  process.exit(0);
+}
+
+// ---------------------------------------------------------------------------
+// Domain to a name a person recognises. Anything unmapped keeps its domain,
+// which is better than guessing — an unknown competitor showing up is a finding,
+// and inventing a label for it would hide that.
+const BRANDS = [
+  [/lenskart\./i, 'Lenskart'], [/titaneyeplus|titan\./i, 'Titan Eye+'],
+  [/specsmakers\./i, 'Specsmakers'], [/lensbazaar\./i, 'Lens Bazaar'],
+  [/coolwinks\./i, 'Coolwinks'], [/eyemyeye\./i, 'EyeMyEye'],
+  [/johnjacobs|johnjacobseyewear\./i, 'John Jacobs'], [/rayban\./i, 'Ray-Ban'],
+  [/fastrack\./i, 'Fastrack'], [/vincentchase\./i, 'Vincent Chase'],
+  [/amazon\./i, 'Amazon'], [/flipkart\./i, 'Flipkart'], [/myntra\./i, 'Myntra'],
+  [/ajio\./i, 'Ajio'], [/nykaa/i, 'Nykaa'], [/tatacliq\./i, 'Tata CLiQ'],
+  [/youtube\./i, 'YouTube'], [/wikipedia\./i, 'Wikipedia'],
+  [/instagram\./i, 'Instagram'], [/facebook\./i, 'Facebook'],
+  [/hashtageyewear/i, 'Hashtag Eyewear'],
+];
+const brandOf = (domain) => (BRANDS.find(([re]) => re.test(domain)) || [])[1] || domain;
+const domainOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, '').toLowerCase(); }
+                          catch { return ''; } };
+
+const sb = async (path, opts = {}) => fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+  ...opts,
+  headers: { apikey: SERVICE_KEY, Authorization: 'Bearer ' + SERVICE_KEY,
+             'Content-Type': 'application/json', ...(opts.headers || {}) }
+});
+
+async function takeBudget() {
+  const r = await sb('rpc/serp_budget_take', {
+    method: 'POST',
+    body: JSON.stringify({ p_provider: provider.name, p_cap: provider.cap, p_n: 1 })
+  });
+  if (!r.ok) throw new Error(`budget check failed ${r.status}`);
+  return (await r.json()) === true;
+}
+
+async function fetchSerp(keyword) {
+  const init = provider.post
+    ? { method: 'POST', ...provider.post(keyword) }
+    : { method: 'GET' };
+  const r = await fetch(provider.url(keyword), { ...init, signal: AbortSignal.timeout(45000) });
+  if (!r.ok) throw new Error(`${provider.name} ${r.status}: ${(await r.text()).slice(0, 140)}`);
+  const j = await r.json();
+  const rows = provider.parse(j).filter(x => x && x.url && x.position);
+  if (!rows.length) throw new Error(`${provider.name} returned no organic results`);
+  return rows.slice(0, 10);
+}
+
+async function save(keyword, rows) {
+  const payload = rows.map(r => {
+    const domain = domainOf(r.url);
+    return {
+      keyword, position: r.position, url: r.url, domain,
+      brand: brandOf(domain), title: (r.title || '').slice(0, 300),
+      is_us: domain.includes(OUR_DOMAIN), provider: provider.name, country: COUNTRY
+    };
+  });
+  const r = await sb('serp_results', { method: 'POST', headers: { Prefer: 'return=minimal' },
+                                       body: JSON.stringify(payload) });
+  if (!r.ok) throw new Error(`save failed ${r.status}: ${(await r.text()).slice(0, 160)}`);
+  return payload;
+}
+
+// ---------------------------------------------------------------------------
+const oneOff = process.argv.slice(2).join(' ').trim();
+
+let keywords;
+if (oneOff) {
+  keywords = [{ keyword: oneOff }];
+} else {
+  const r = await sb(`rpc/serp_next_keywords`, {
+    method: 'POST', body: JSON.stringify({ p_limit: DAILY })
+  });
+  if (!r.ok) { console.error(`could not pick keywords (${r.status}). Has serp.sql been run?`); process.exit(1); }
+  keywords = await r.json();
+  if (!keywords.length) {
+    console.log('No keywords to check yet — gsc_keywords is empty.');
+    console.log('Run scripts/gsc.mjs first; this picks what to check from what Google');
+    console.log('says you already get impressions for.');
+    process.exit(0);
+  }
+}
+
+console.log(`provider ${provider.name} (free cap ${provider.cap}/month), checking ${keywords.length} keyword(s)\n`);
+
+let done = 0, spent = 0;
+for (const k of keywords) {
+  const kw = k.keyword;
+  if (!await takeBudget()) {
+    console.log(`\nmonthly budget for ${provider.name} is spent — stopping here.`);
+    console.log('Nothing is lost: serp_next_keywords will pick up where this left off.');
+    break;
+  }
+  spent++;
+  try {
+    const rows = await fetchSerp(kw);
+    const saved = await save(kw, rows);
+    const us = saved.find(x => x.is_us);
+    const top = saved.slice(0, 5).map(x => `${x.position}.${x.brand}`).join('  ');
+    console.log(`  ${kw}`);
+    console.log(`     ${top}`);
+    console.log(`     us: ${us ? '#' + us.position : 'not in top 10'}` +
+                (k.impressions ? `   (${Number(k.impressions).toLocaleString()} impressions/28d` +
+                                 `${k.position ? `, GSC avg pos ${k.position}` : ''})` : ''));
+    done++;
+  } catch (e) {
+    console.error(`  ${kw}: ${(e.message || e).slice(0, 140)}`);
+  }
+  // Free tiers are usually rate limited to about one call a second; going
+  // faster gets 429s that still count against the allowance.
+  await new Promise(s => setTimeout(s, 1500));
+}
+
+console.log(`\n${done}/${spent} checked successfully.`);
+const b = await sb(`serp_budget?provider=eq.${provider.name}&select=used,monthly_cap&order=month.desc&limit=1`);
+if (b.ok) { const j = await b.json();
+  if (j[0]) console.log(`budget this month: ${j[0].used}/${j[0].monthly_cap} used`); }
