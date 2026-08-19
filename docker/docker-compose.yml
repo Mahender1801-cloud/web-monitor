@@ -102,5 +102,37 @@ services:
       - rest
     command: tunnel --no-autoupdate --url http://rest:3000
 
+  # Metasearch, self-hosted — the free unmetered route to SERP data.
+  #
+  #   docker compose -f docker/docker-compose.yml --profile search up -d searxng
+  #
+  # Asking google.com directly from this machine returns a CAPTCHA on the first
+  # request. Asking through SearXNG works: it queries several engines' own
+  # interfaces and merges the answers, and google cse answered every test query
+  # at 3-second spacing with no failures — about 1,200 keywords an hour.
+  #
+  # It is also why one engine going down stops being an outage. During testing
+  # Brave suspended us for "too many requests" and Startpage returned a CAPTCHA;
+  # the runs carried on with what was still answering, and reported which
+  # engines had dropped rather than silently returning less.
+  searxng:
+    image: searxng/searxng:latest
+    container_name: wm-searx
+    profiles: ["search"]
+    restart: unless-stopped
+    environment:
+      SEARXNG_BASE_URL: http://localhost:8888/
+      # Not a secret worth protecting: this instance is bound to localhost and
+      # serves one script on this machine. It must still be set or SearXNG
+      # refuses to start.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-local-only-not-a-secret}
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    ports:
+      # Bound to the loopback address deliberately. A metasearch instance
+      # reachable from the network is an open proxy that anyone can point at
+      # search engines using this IP, and the engines will block the IP, not them.
+      - "127.0.0.1:8888:8080"
+
 volumes:
   archive-data:
