@@ -126,9 +126,13 @@ try {
   });
   console.log(`  ${rows.length.toLocaleString()} rows from Search Console`);
 
+  // Empty string, not null: these five columns are the primary key, and a null
+  // in a key never equals another null — the same row would insert repeatedly
+  // instead of merging, and the upsert would quietly stop deduplicating.
   const mapped = rows.map(r => ({
-    d: r.keys[0], query: r.keys[1], device: r.keys[2], country: r.keys[3],
-    page: null,
+    d: r.keys[0], query: r.keys[1],
+    device: r.keys[2] || '', country: r.keys[3] || '',
+    page: '',
     clicks: r.clicks || 0, impressions: r.impressions || 0,
     ctr: r.ctr ?? null,
     position: r.position ?? null

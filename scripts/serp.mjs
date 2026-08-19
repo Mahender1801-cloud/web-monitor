@@ -182,6 +182,28 @@ const SEARX = {
     const use = fromGoogle.length ? fromGoogle : all;
     return use.map((r, i) => ({ position: i + 1, url: r.url, title: r.title || '',
                                 engines: (r.engines || []).join(',') }));
+  },
+
+  // Three of the page features come back in the same response, so they cost
+  // nothing extra. Ads, People Also Ask, the local pack and AI Overview do not —
+  // SearXNG strips advertising by design, and the rest are rendered by Google's
+  // own JavaScript. Those stay absent rather than approximated, because a made-up
+  // ad block is worse than a missing one.
+  features: (j) => {
+    const out = [];
+    if (j.infoboxes?.length) {
+      const k = j.infoboxes[0];
+      out.push({ kind: 'knowledge', title: k.infobox, url: k.id || null,
+                 body: (k.content || '').slice(0, 4000),
+                 extra: { attributes: k.attributes ?? null, engine: k.engine ?? null } });
+    }
+    for (const [i, s] of (j.suggestions || []).entries())
+      out.push({ kind: 'related', position: i + 1, title: s, url: null });
+    for (const a of (j.answers || []))
+      out.push({ kind: 'answer', title: null, url: a.url || null,
+                 body: (a.answer || '').slice(0, 4000),
+                 extra: { engine: a.engine ?? null } });
+    return out;
   }
 };
 

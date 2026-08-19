@@ -26,18 +26,24 @@
 -- ---------------------------------------------------------------------------
 -- 1) Search Console: one row per query per day.
 -- ---------------------------------------------------------------------------
+-- The dimension columns are NOT NULL with an empty-string default rather than
+-- nullable. A primary key cannot contain expressions, so coalesce() is not
+-- available here — and nulls would break the key anyway, since null never
+-- equals null and the same row could be inserted twice. PostgREST's upsert
+-- also needs real columns to conflict on, which an expression index would not
+-- give it.
 create table if not exists public.gsc_keywords (
   d           date   not null,
   query       text   not null,
-  page        text,
-  country     text,
-  device      text,
+  page        text   not null default '',
+  country     text   not null default '',
+  device      text   not null default '',
   clicks      integer not null default 0,
   impressions integer not null default 0,
   ctr         numeric,
   position    numeric,                    -- Google's own average position
   created_at  timestamptz not null default now(),
-  primary key (d, query, coalesce(page,''), coalesce(country,''), coalesce(device,''))
+  primary key (d, query, page, country, device)
 );
 create index if not exists gsc_day       on public.gsc_keywords (d desc);
 create index if not exists gsc_query     on public.gsc_keywords (query);
@@ -109,7 +115,10 @@ grant execute on function public.serp_budget_take(text, int, int) to anon;
 -- to page one to be winnable, and down where it was checked recently.
 -- ---------------------------------------------------------------------------
 create or replace function public.serp_next_keywords(p_limit int default 20)
-returns table(keyword text, impressions bigint, position numeric, last_checked timestamptz)
+-- "position" is quoted because Postgres reserves it — position(x in y) is a
+-- built-in function, and an unquoted column of that name is a syntax error in
+-- a RETURNS TABLE list. Quoting keeps the name the callers already expect.
+returns table(keyword text, impressions bigint, "position" numeric, last_checked timestamptz)
 language sql stable
 set statement_timeout = '20s'
 as $$
@@ -247,3 +256,119 @@ begin
   return result;
 end $$;
 grant execute on function public.serp_ad_competitors(int) to anon;
+
+-- ============================================================================
+-- Competitor keyword discovery — the free version of "their top 200 keywords".
+--
+-- Ahrefs and Semrush answer this by crawling an enormous keyword corpus and
+-- recording who ranks for each one. There is no free tier for their database,
+-- but the method itself is not secret and the two inputs it needs are now free:
+-- Google Suggest expands keywords without limit, and self-hosted SearXNG checks
+-- who ranks for them at roughly 1,200 an hour.
+--
+-- So instead of buying the answer, the corpus is built here. Every SERP already
+-- fetched records every domain on the page. Ask it the question in reverse and
+-- "which keywords does Lenskart rank for" falls out of data already collected.
+--
+-- What it is honest about: coverage. This knows about a competitor only within
+-- the keywords actually checked. Ahrefs has millions; this has however many the
+-- expansion has reached. So every answer reports the corpus size alongside it —
+-- "top 200 of 8,000 keywords checked" is a usable claim, "their top 200" is not.
+-- ============================================================================
+
+create or replace function public.competitor_keywords(
+  p_brand text, p_limit int default 200, p_days int default 60)
+returns json language plpgsql stable
+set statement_timeout = '30s'
+as $$
+declare result json; corpus bigint;
+begin
+  select count(distinct keyword) into corpus
+  from public.serp_results
+  where checked_at > now() - make_interval(days => p_days);
+
+  with latest as (
+    select distinct on (keyword, domain)
+           keyword, domain, brand, position, url, is_us, checked_at
+    from public.serp_results
+    where checked_at > now() - make_interval(days => p_days)
+    order by keyword, domain, checked_at desc
+  ),
+  theirs as (
+    select keyword, position, url from latest
+    where coalesce(brand, domain) ilike p_brand
+       or domain ilike '%' || p_brand || '%'
+  ),
+  -- what this shop does on the same terms, so the list is actionable rather
+  -- than merely informative: a keyword they own and we are absent from is a
+  -- gap; one where we sit just below them is a fight worth picking
+  ours as (
+    select keyword, min(position) our_pos from latest where is_us group by keyword
+  ),
+  -- who else is on those pages — this answers "top 3 brands on that keyword"
+  top3 as (
+    select keyword, string_agg(coalesce(brand, domain), ', ' order by position) top_brands
+    from (select keyword, brand, domain, position,
+                 row_number() over (partition by keyword order by position) rn
+          from latest) t
+    where rn <= 3 group by keyword
+  ),
+  -- demand comes from Search Console, so their keywords are ranked by traffic
+  -- this shop can actually verify rather than by a volume estimate nobody can
+  demand as (
+    select query, sum(impressions)::bigint imps
+    from public.gsc_keywords where d > current_date - 28 group by query
+  )
+  select json_build_object(
+    'brand', p_brand,
+    'corpus_keywords', corpus,
+    'ranked_for', (select count(*) from theirs),
+    'window_days', p_days,
+    'keywords', (
+      select coalesce(json_agg(json_build_array(
+               kw, pos, our_pos, imps, top_brands, url) order by ord), '[]'::json)
+      from (
+        select t.keyword kw, t.position pos, o.our_pos, d.imps, k.top_brands, t.url,
+               row_number() over (order by coalesce(d.imps, 0) desc, t.position) ord
+        from theirs t
+        left join ours o using (keyword)
+        left join top3 k using (keyword)
+        left join demand d on d.query = t.keyword
+        order by coalesce(d.imps, 0) desc, t.position
+        limit p_limit
+      ) z)
+  ) into result;
+  return result;
+end $$;
+grant execute on function public.competitor_keywords(text, int, int) to anon;
+
+-- The brands worth asking about — the three that appear most across the corpus.
+create or replace function public.top_competitors(p_n int default 3, p_days int default 60)
+returns json language plpgsql stable
+set statement_timeout = '20s'
+as $$
+declare result json;
+begin
+  with latest as (
+    select distinct on (keyword, domain) keyword, coalesce(brand, domain) brand, position, is_us
+    from public.serp_results
+    where checked_at > now() - make_interval(days => p_days)
+    order by keyword, domain, checked_at desc
+  )
+  select coalesce(json_agg(json_build_array(brand, kws, avg_pos, top3) order by kws desc), '[]'::json)
+  into result
+  from (
+    select brand, count(distinct keyword) kws, round(avg(position), 1) avg_pos,
+           count(*) filter (where position <= 3) top3
+    from latest
+    where not is_us
+      -- marketplaces and social sites crowd every retail SERP without being
+      -- competitors in any useful sense; naming them as rivals would send the
+      -- reader chasing a fight with Amazon
+      and brand not in ('Amazon','Flipkart','Myntra','Ajio','YouTube','Wikipedia',
+                        'Instagram','Facebook','Tata CLiQ','Nykaa')
+    group by brand order by kws desc limit p_n
+  ) t;
+  return result;
+end $$;
+grant execute on function public.top_competitors(int, int) to anon;
