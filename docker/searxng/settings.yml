@@ -28,3 +28,18 @@ outgoing:
   max_request_timeout: 12.0
   pool_connections: 100
   pool_maxsize: 20
+
+# The plain Google WEB engine is deliberately NOT enabled.
+#
+# It ships with SearXNG but its own default settings mark it inactive: true,
+# and the reason is the same one this project already hit — Google blocks
+# metasearch instances. Forcing it on was tried: with inactive:false it loads
+# into the config, then returns zero results for every query and reports no
+# error at all, which is worse than being absent because it silently costs a
+# timeout on every search.
+#
+# So the Google-sourced results here come from "google cse" — Google's index
+# through the Programmable Search interface. That is real Google data and it is
+# NOT google.com's organic ranking; the two can order the same page differently.
+# scripts/serp_validate.mjs measures how far apart they are on this shop's own
+# keywords, using Search Console as the truth.

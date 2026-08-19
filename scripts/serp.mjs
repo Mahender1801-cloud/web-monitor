@@ -149,7 +149,15 @@ const BRAVE = {
 };
 
 // ---------------------------------------------------------------------------
-// SearXNG, self-hosted — free, unmetered, and it reaches Google.
+// SearXNG, self-hosted — free, unmetered, and it reaches Google's index.
+//
+// Precisely: the Google-sourced results come from "google cse", the
+// Programmable Search interface. That is real Google data, and it is NOT
+// google.com's organic ranking — the two can order the same page differently.
+// The plain google.com engine ships with SearXNG marked inactive because Google
+// blocks metasearch instances; forcing it on here loaded it and then returned
+// zero results with no error on every query. serp_validate.mjs measures the gap
+// against Search Console, which is the only ground truth available for free.
 //
 // This is what direct scraping could not do. SearXNG asks several engines at
 // once and merges what comes back; measured here, google cse answered every
