@@ -223,6 +223,15 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
 /* interactive trend controls */
 /* QA accordion: ten categories on one page, each summarised in its header so
    the whole checklist can be read without opening anything. */
+/* Alert history: collapsed by default. It is a reference, not a headline —
+   the headline is the banner above it. */
+.alertlog{border:1px solid var(--line);border-radius:10px;margin:-8px 0 18px;background:var(--card,#fff)}
+.alertlog summary{cursor:pointer;padding:10px 14px;font-size:12.5px;font-weight:600;color:var(--muted);list-style:none}
+.alertlog summary::-webkit-details-marker{display:none}
+.alertlog summary:before{content:'▸';margin-right:7px;color:var(--faint)}
+.alertlog[open] summary:before{content:'▾'}
+.alertlog summary span{font-weight:400;color:var(--faint)}
+.alertlog #alertLogBody{border-top:1px solid var(--line);overflow-x:auto}
 .qasec{border:1px solid var(--line);border-radius:10px;margin-bottom:8px;background:var(--card,#fff);overflow:hidden}
 .qahead{display:flex;align-items:center;gap:10px;width:100%;padding:12px 14px;background:none;border:0;
   cursor:pointer;text-align:left;font:inherit;color:inherit}
@@ -699,6 +708,14 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
       <!-- HEALTH -->
       <section class="view" data-view="health">
         <div id="alertBox"></div>
+        <!-- The log behind the banners. Two CRITICAL alerts sat up there for two
+             days after their condition had cleared, which is how a real warning
+             turns into wallpaper. This shows when each one fired, when it
+             cleared, and how long it actually lasted. -->
+        <details class="alertlog" id="alertLog">
+          <summary>Alert history <span id="alertLogCount"></span></summary>
+          <div id="alertLogBody"></div>
+        </details>
         <div class="section-h"><h2>What this is costing</h2><span id="moneyNote">conversion by speed band, measured on this store’s own orders</span></div>
         <div id="moneyBox"></div>
         <div class="section-h"><h2>Do these first</h2><span>ranked by impact, not by category</span></div>
@@ -1829,6 +1846,38 @@ async function ackAlert(id){
   fetchAlerts().then(r=>paintAlerts(r||[]));
 }
 
+const fetchAlertLog = () => cachedRpc('alert_history', {p_days:14}, 'alog_'+nowQ());
+
+function paintAlertLog(rows){
+  const body=document.getElementById('alertLogBody'), cnt=document.getElementById('alertLogCount');
+  if(!body) return;
+  if(!rows){ body.innerHTML=needSql('alerts_resolve.sql'); if(cnt) cnt.textContent=''; return; }
+  if(!rows.length){ body.innerHTML='<div class="empty" style="padding:12px">Nothing in the last 14 days.</div>';
+                    if(cnt) cnt.textContent=''; return; }
+  const open=rows.filter(a=>!a[6]).length;
+  if(cnt) cnt.textContent='· '+rows.length+' in 14 days'+(open?', '+open+' still open':', all cleared');
+  body.innerHTML='<table class="tbl"><thead><tr>'
+    + '<th>Fired</th><th>Alert</th><th>Source</th><th>Cleared</th><th>Lasted</th></tr></thead><tbody>'
+    + rows.map(a=>{
+        const [id,sev,title,detail,src,at,res,by,mins,ack]=a;
+        // An alert is only "open" if it has neither cleared nor been dismissed —
+        // the distinction the banner list was missing.
+        const state = res ? 'cleared' : (ack ? 'dismissed' : 'open');
+        const dur = mins==null ? '—' : (mins<60 ? mins+'m' : (mins/60).toFixed(1)+'h');
+        return '<tr>'
+          + '<td class="mono" style="white-space:nowrap">'+new Date(at).toLocaleString()+'</td>'
+          + '<td><span class="cellval '+(sev==='critical'?'poor':'warn')+'">'+esc(sev)+'</span> '+esc(title)
+            + (detail?'<div style="font-size:11px;color:var(--faint)">'+esc(detail)+'</div>':'')+'</td>'
+          + '<td>'+esc(src||'—')+'</td>'
+          + '<td class="mono" style="white-space:nowrap">'
+            + (res?new Date(res).toLocaleString()+(by==='auto'?' <span style="color:var(--faint)">auto</span>':'')
+                  :'<span class="cellval '+(state==='open'?'poor':'')+'">'+state+'</span>')+'</td>'
+          + '<td class="mono">'+dur+'</td>'
+          + '</tr>';
+      }).join('')
+    + '</tbody></table>';
+}
+
 function paintMoney(m){
   const el=document.getElementById('moneyBox'); if(!el) return;
   if(!m){ el.innerHTML='<div class="empty" style="padding:10px">Loading…</div>'; return; }
@@ -2195,6 +2244,7 @@ function renderHealth(){
 
   // ---- alerts, money and priorities first: what to act on ----------------
   fetchAlerts().then(r=>{ if(curView==='health') paintAlerts(r||[]); });
+  fetchAlertLog().then(r=>{ if(curView==='health') paintAlertLog(r); });
   paintMoney(null);
   fetchMoney(cur.from,cur.to).then(m=>{ if(curView==='health') paintMoney(m); });
   paintPriorities(null);

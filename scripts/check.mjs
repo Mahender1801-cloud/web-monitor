@@ -790,6 +790,18 @@ async function runAuto(key, monitor, homepage) {
   if (checkRows.length) await sbInsert('task_checks', checkRows);
   // Alerts run last so they can see everything this run collected.
   await runAlerts();
+
+  // Close alerts whose condition has cleared. Without this an alert is raised
+  // once and stays raised: two "no orders in 3 hours" banners sat on the
+  // dashboard for two days while orders were arriving normally, which is how a
+  // real warning turns into wallpaper. Failure is not fatal — a stale banner is
+  // better than losing the run that raises new ones.
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/alerts_autoresolve`, { method: 'POST', headers: H });
+    if (r.ok) { const n = await r.json(); if (n) console.log(`Auto-resolved ${n} alert(s).`); }
+    else console.log('alerts_autoresolve unavailable — run alerts_resolve.sql');
+  } catch (e) { console.log('alerts_autoresolve skipped:', e.message.slice(0, 80)); }
+
   console.log(`Done. ${psiRows.length} PSI rows, ${checkRows.length} task checks.`);
 })().catch(e => { console.error(e); process.exit(1); });
 
