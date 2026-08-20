@@ -971,6 +971,15 @@ async function saveScore(url){
   const r=LAST_SCORES[url];
   if(!r){ alert('Score this URL again, then save.'); return; }
   if(!(LIVE&&sb)){ alert('Not connected to Supabase.'); return; }
+  // A run where every category came back zero is an unreachable URL, not a site
+  // that scores zero. Saved, it sits in the table looking like a verdict — the
+  // list already carried one for a probe domain that never existed.
+  const s=r.scores||{};
+  if(!s.overall && !s.performance && !s.seo && !s.accessibility && !s.bestPractices){
+    alert('Every category came back zero, which means the page could not be fetched —\n' +
+          'not that it scores zero. Check the URL is reachable, then score it again.');
+    return;
+  }
   const btn=document.getElementById('save-'+btoa(url).replace(/=/g,''));
   if(btn){ btn.textContent='saving…'; btn.disabled=true; }
   try{
@@ -1154,7 +1163,14 @@ function scoreCardHTML(r){
 }
 async function loadSavedScores(){
   if(!(LIVE&&sb)) return;
-  try{ const {data}=await sb.from('web_scores').select('*').order('created_at',{ascending:false}).limit(300); DATA.webscores=data||[]; if(curView==='webscore')renderWebScore(); }catch(e){}
+  try{
+    const {data}=await sb.from('web_scores').select('*').order('created_at',{ascending:false}).limit(300);
+    // Drop rows where every category is zero. Those are failed fetches, and
+    // shown as a row they read as a real verdict about a real site.
+    DATA.webscores=(data||[]).filter(r =>
+      r.overall || r.performance || r.seo || r.accessibility || r.best_practices);
+    if(curView==='webscore')renderWebScore();
+  }catch(e){}
 }
 function renderWebScore(){
   const all=DATA.webscores||[], seen={}, latest=[];
@@ -2262,11 +2278,16 @@ function renderHealth(){
 function paintFunnel(f){
   const el=document.getElementById('funnelBox'); if(!el) return;
   if(!f){ el.innerHTML='<div class="empty" style="padding:10px">Loading funnel…</div>'; return; }
+  // "Reached cart" is deliberately NOT a step here. This theme uses a drawer
+  // that opens over the page on add-to-cart, so most shoppers reach checkout
+  // without /cart ever loading — measured live: 85 sessions saw /cart while 141
+  // clicked checkout. As a funnel step that drew a later stage larger than the
+  // one before it, which is impossible and read as a broken chart. It is a real
+  // number about a different thing, so it moved to a note underneath.
   const steps=[
     ['Sessions',        f.sessions,       f.views?`${(+f.views).toLocaleString()} page views`:''],
     ['Viewed product',  f.viewed_product, ''],
     ['Added to cart',   f.added_to_cart,  ''],
-    ['Reached cart',    f.viewed_cart,    ''],
     ['Clicked checkout',f.checkout_click, ''],
     ['Purchased',       f.purchased,      'orders placed']
   ];
@@ -2293,7 +2314,13 @@ function paintFunnel(f){
       <div style="width:150px;font-size:12px" class="mono">${n.toLocaleString()} · ${pct.toFixed(1)}%${sub?`<span style="color:var(--faint)"> · ${sub}</span>`:''}</div>
       <div style="width:78px;font-size:11px;color:var(--faint)">${note}</div>
     </div>`;
-  }).join('')+'</div>';
+  }).join('')
+  + (f.viewed_cart ? `<div style="margin-top:9px;font-size:11.5px;color:var(--faint);line-height:1.5">
+       <b class="mono">${(+f.viewed_cart).toLocaleString()}</b> sessions opened the <span class="mono">/cart</span> page.
+       That is not a funnel step here: the theme's drawer opens over the page, so most
+       shoppers reach checkout without <span class="mono">/cart</span> ever loading.
+     </div>` : '')
+  + '</div>';
 }
 
 
@@ -3205,9 +3232,18 @@ function seriesFromDaily(daily, mp, dev, metric, days){
   return out;
 }
 function renderMonitors(){
-  const mons=DATA.monitors, body=document.getElementById('monBody');
+  const mons=DATA.monitors||[], body=document.getElementById('monBody');
   if(!body) return;
-  if(!mons.length){ body.innerHTML='<tr><td colspan=7 class="empty">No monitors yet — add a page URL above.</td></tr>'; return; }
+  // The view paints once immediately and again when the lazy fetch lands. Until
+  // that fetch has run, an empty list means "not loaded yet", not "none exist" —
+  // and saying "No monitors yet" there is a confident wrong answer that had
+  // people believing four configured monitors had disappeared.
+  if(!mons.length){
+    body.innerHTML = (LIVE && sb && !loaded.mon)
+      ? '<tr><td colspan=7 class="empty">Loading monitors…</td></tr>'
+      : '<tr><td colspan=7 class="empty">No monitors yet — add a page URL above.</td></tr>';
+    return;
+  }
   // 10-day window for the sparklines, independent of the Summary date picker
   const to=nowQ(), from=to-10*DAY;
   fetchPageDaily(from,to).then(daily=>{
