@@ -223,21 +223,25 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
 /* interactive trend controls */
 .trendbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
 .trendkey{margin-left:auto;font-size:11px;color:var(--faint);letter-spacing:.02em}
-/* Five metrics side by side. auto-fit rather than a fixed five columns so the
-   row reflows to 3, 2 and 1 as the screen narrows instead of squeezing five
-   unreadable sparklines onto a phone. */
-.trendgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
-.tcard{border:1px solid var(--line);border-radius:10px;padding:11px 12px 8px;background:var(--card,#fff)}
-.tcard .thead{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
-.tcard .tname{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
-.tcard .tval{font-size:19px;font-weight:650;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
-.tcard .tval.good{color:var(--good)}.tcard .tval.warn{color:var(--warn)}.tcard .tval.poor{color:var(--poor)}
-.tcard .tdelta{font-size:11px;font-weight:600;white-space:nowrap}
-.tcard .tdelta.up{color:var(--poor)}.tcard .tdelta.down{color:var(--good)}.tcard .tdelta.flat{color:var(--faint)}
-.tcard .tspark{margin-top:7px;display:block;width:100%;height:52px;overflow:visible}
-.tcard .tbase{font-size:10.5px;color:var(--faint);margin-top:2px}
-.tcard .thit{fill:transparent;cursor:crosshair}
-.tcard.dim{opacity:.55}
+/* Sparkline inside each KPI tile: the number says where the metric is, the line
+   says how it got there. They sit in the tiles rather than a separate strip so
+   value and shape are read together instead of scrolled between. */
+#sumTiles .tspark{margin-top:6px;display:block;width:100%;height:34px;overflow:visible}
+#sumTiles .thit{fill:transparent;cursor:crosshair}
+
+/* Heatmap. Cells are sized by the grid, not fixed, so a 24-column hourly view
+   and a 7-column daily one both fill the width without leaving a gutter. */
+.hmwrap{overflow-x:auto}
+.hmgrid{display:grid;gap:2px;min-width:520px}
+.hmcell{aspect-ratio:1/.62;border-radius:3px;cursor:crosshair;position:relative}
+.hmcell.na{background:repeating-linear-gradient(45deg,#F3F4F6 0 4px,#FAFAFB 4px 8px)}
+.hmrowlab{font-size:10px;color:var(--muted);display:flex;align-items:center;justify-content:flex-end;padding-right:6px;white-space:nowrap}
+.hmcollab{font-size:9.5px;color:var(--faint);text-align:center;padding-bottom:3px;white-space:nowrap}
+.hmtip{position:fixed;z-index:60;background:#0E1728;color:#fff;padding:7px 10px;border-radius:8px;
+  font-size:11.5px;line-height:1.45;pointer-events:none;opacity:0;transition:opacity .1s;white-space:nowrap}
+.hmtip.on{opacity:1}
+.hmscale{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--faint)}
+.hmswatch{width:13px;height:9px;border-radius:2px;display:inline-block}
 .segs.sm button{padding:5px 11px;font-size:12px}
 .gransel{margin-left:auto;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-family:inherit;font-size:12px;background:var(--surface);color:var(--muted)}
 /* audience card header + pivot button + pivot table */
@@ -526,12 +530,15 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
               <option value="hour">by hour</option>
               <option value="day">by day</option>
             </select>
-            <span class="trendkey">— this period &nbsp;·&nbsp; ---- previous</span>
+            <div class="segs sm" id="hmMetric">
+              <button data-m="lcp" class="on">LCP</button><button data-m="inp">INP</button><button data-m="cls">CLS</button><button data-m="fcp">FCP</button><button data-m="ttfb">TTFB</button>
+            </div>
+            <span class="trendkey" id="hmLegend"></span>
           </div>
-          <!-- All five metrics at once. The tabs that used to sit here showed one
-               metric and hid four, so a regression in TTFB stayed invisible while
-               you were looking at LCP. -->
-          <div class="trendgrid" id="trendGrid"></div>
+          <!-- A heatmap rather than a line. At hourly granularity over a week a
+               line is 168 points of noise; the same data as day x hour shows the
+               pattern that actually matters — which hours of which days are slow. -->
+          <div class="hmwrap" id="trendHeat"></div>
         </div>
         <div class="section-h"><h2>Audience &amp; network</h2><span id="audRange"></span></div>
         <div class="grid g4 audience" id="audienceGrid"></div>
@@ -2663,46 +2670,57 @@ async function fetchTrend(from,to,bucket,metric){
 }
 let trendToken=0;
 const TREND_KEYS=['lcp','inp','cls','fcp','ttfb'];
+let hmMetric='lcp';
 
-// All five metrics, not one. Ten cached calls rather than two, which is why the
-// per-metric cache inside fetchTrend matters more here than it did with tabs.
-async function updateTrend(cur,cmp){
-  const my=++trendToken;
-  const bucket = trendBucket==='auto'?autoBucket(cur.from,cur.to):trendBucket;
-  const series = await Promise.all(TREND_KEYS.map(async m => {
-    const [cs,ps] = await Promise.all([
-      fetchTrend(cur.from,cur.to,bucket,m),
-      cmp?fetchTrend(cmp.from,cmp.to,bucket,m):Promise.resolve(null)
-    ]);
-    return [m,{cs,ps}];
-  }));
-  if(my!==trendToken) return;                 // a newer request superseded this one
-  drawTrendGrid(cur,cmp,bucket,Object.fromEntries(series));
+// The heatmap wants hourly buckets to say anything: its whole point is showing
+// which hours of which days are slow. 'auto' therefore means hour here, where
+// for a line chart over a week it meant day.
+function autoHeatBucket(from,to){
+  const days=(to-from)/86400000;
+  if(days<=1.5) return 'minute';
+  if(days<=21)  return 'hour';
+  return 'day';
 }
 
-// Sparklines are hand-drawn SVG rather than five Chart.js instances. Chart.js
-// would mean destroying and rebuilding five canvases on every live refresh —
-// exactly the restart flicker this dashboard was asked not to do — and five
-// chart objects is a lot of machinery to draw five paths.
+async function updateTrend(cur,cmp){
+  const my=++trendToken;
+  // Sparklines keep the coarse bucket — a tile 34px tall cannot show 168 points.
+  const sparkBucket = trendBucket==='auto'?autoBucket(cur.from,cur.to):trendBucket;
+  const heatBucket  = trendBucket==='auto'?autoHeatBucket(cur.from,cur.to):trendBucket;
+
+  const [series, heat] = await Promise.all([
+    Promise.all(TREND_KEYS.map(async m => {
+      const [cs,ps] = await Promise.all([
+        fetchTrend(cur.from,cur.to,sparkBucket,m),
+        cmp?fetchTrend(cmp.from,cmp.to,sparkBucket,m):Promise.resolve(null)
+      ]);
+      return [m,{cs,ps}];
+    })),
+    fetchTrend(cur.from,cur.to,heatBucket,hmMetric)
+  ]);
+  if(my!==trendToken) return;                 // a newer request superseded this one
+  drawTileSparks(Object.fromEntries(series));
+  drawHeatmap(cur,heatBucket,heat);
+}
+
+// Hand-drawn SVG rather than a chart library: five tiles that redraw on every
+// live refresh would mean destroying and rebuilding five canvases, which is the
+// restart flicker this dashboard was asked not to do.
 function sparkPath(vals,w,h,lo,hi){
   const pts=[];
   const step = vals.length>1 ? w/(vals.length-1) : w;
   // Inset the plot. A Catmull-Rom curve overshoots its own points, and drawing
-  // edge to edge pushed LCP's peak to y=-4.3 — outside the box and into the
-  // value text above it.
-  const PAD=5, top=PAD, usable=h-PAD*2;
+  // edge to edge pushed LCP's peak outside the box and into the value above it.
+  const PAD=4, top=PAD, usable=h-PAD*2;
   const flat = !(hi>lo);
   vals.forEach((v,i)=>{
     if(v==null) return;
-    // Every value identical is a steady metric, not a zero one. Without this it
-    // drew along the very bottom edge, which reads as broken — CLS sat at
-    // 0.0025 all week and looked like it had flatlined at nothing.
+    // Every value identical is a steady metric, not a zero one. Without this the
+    // line sat on the bottom edge and CLS, flat at 0.0025 all week, looked dead.
     const y = flat ? top+usable/2 : top + usable - ((v-lo)/(hi-lo))*usable;
     pts.push([i*step, y]);
   });
   if(!pts.length) return {line:'',area:''};
-  // Catmull-Rom through the points, so the line curves the way the old chart
-  // did instead of showing every bucket as a hard corner.
   let d='M'+pts[0][0].toFixed(1)+','+pts[0][1].toFixed(1);
   for(let i=0;i<pts.length-1;i++){
     const p0=pts[i-1]||pts[i], p1=pts[i], p2=pts[i+1], p3=pts[i+2]||p2;
@@ -2710,84 +2728,167 @@ function sparkPath(vals,w,h,lo,hi){
     const c2=[p2[0]-(p3[0]-p1[0])/6, p2[1]-(p3[1]-p1[1])/6];
     d+='C'+c1[0].toFixed(1)+','+c1[1].toFixed(1)+' '+c2[0].toFixed(1)+','+c2[1].toFixed(1)+' '+p2[0].toFixed(1)+','+p2[1].toFixed(1);
   }
-  const area=d+'L'+pts[pts.length-1][0].toFixed(1)+','+h+'L'+pts[0][0].toFixed(1)+','+h+'Z';
-  return {line:d,area};
+  return {line:d, area:d+'L'+pts[pts.length-1][0].toFixed(1)+','+h+'L'+pts[0][0].toFixed(1)+','+h+'Z'};
 }
 
-function drawTrendGrid(cur,cmp,bucket,series){
-  const box=document.getElementById('trendGrid'); if(!box) return;
-  const W=200,H=52;
-  const fmtLabel=(ts)=>{const d=new Date(ts); return bucket==='day'?((d.getMonth()+1)+'/'+d.getDate()):bucket==='minute'?(d.getHours()+':'+String(d.getMinutes()).padStart(2,'0')):(d.getMonth()+1)+'/'+d.getDate()+' '+d.getHours()+'h';};
-
-  box.innerHTML = TREND_KEYS.map(m => {
-    const M=METRIC_META[m], S=series[m]||{};
-    const cs=S.cs||[], ps=S.ps||[];
-    if(!cs.length) return '<div class="tcard dim"><div class="thead"><span class="tname">'+M.label+'</span></div>'+
-      '<div class="tval">&mdash;</div><div class="tbase">no data in this window</div></div>';
-
-    const curV = cs.map(a=>a[1]==null?null:+a[1]);
-    const cmpV = ps.length ? cs.map((_,i)=>{const p=ps[i]; return p&&p[1]!=null?+p[1]:null;}) : [];
-
-    // One scale for both lines. Scaling them separately would draw a flat
-    // previous period beside a dramatic current one from identical numbers.
+// Sparklines go inside the KPI tiles that paintSummary already wrote, so the
+// value and its shape are read together rather than in two places.
+function drawTileSparks(series){
+  const host=document.getElementById('sumTiles'); if(!host) return;
+  const cards=[...host.children];
+  TREND_KEYS.forEach((m,idx)=>{
+    const card=cards[idx]; if(!card) return;
+    card.querySelector('.tspark')?.remove();
+    const M=METRIC_META[m], S=series[m]||{}, cs=S.cs||[], ps=S.ps||[];
+    if(!cs.length) return;
+    const curV=cs.map(a=>a[1]==null?null:+a[1]);
+    const cmpV=ps.length?cs.map((_,i)=>{const p=ps[i]; return p&&p[1]!=null?+p[1]:null;}):[];
     const all=[...curV,...cmpV].filter(v=>v!=null);
-    if(!all.length) return '<div class="tcard dim"><div class="thead"><span class="tname">'+M.label+'</span></div>'+
-      '<div class="tval">&mdash;</div><div class="tbase">no data in this window</div></div>';
+    if(!all.length) return;
+    // One scale for both lines: scaled separately, identical numbers would draw
+    // a flat previous period beside a dramatic current one.
     const lo=Math.min.apply(null,all), hi=Math.max.apply(null,all);
+    const W=200,H=34;
     const c=sparkPath(curV,W,H,lo,hi), p=sparkPath(cmpV,W,H,lo,hi);
+    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.setAttribute('class','tspark');
+    svg.setAttribute('viewBox','0 0 '+W+' '+H);
+    svg.setAttribute('preserveAspectRatio','none');
+    svg.setAttribute('aria-label',M.label+' trend');
+    svg.innerHTML=
+      '<defs><linearGradient id="sg-'+m+'" x1="0" y1="0" x2="0" y2="1">'+
+      '<stop offset="0%" stop-color="'+M.color+'" stop-opacity=".24"/>'+
+      '<stop offset="100%" stop-color="'+M.color+'" stop-opacity="0"/></linearGradient></defs>'+
+      (p.line?'<path d="'+p.line+'" fill="none" stroke="'+M.color+'" stroke-opacity=".5" stroke-width="1.3" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>':'')+
+      (c.area?'<path d="'+c.area+'" fill="url(#sg-'+m+')"/>':'')+
+      '<path d="'+c.line+'" fill="none" stroke="'+M.color+'" stroke-width="1.9" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>'+
+      '<rect class="thit" x="0" y="0" width="'+W+'" height="'+H+'"/>';
+    card.appendChild(svg);
 
-    const mean=(a)=>{const v=a.filter(x=>x!=null); return v.length? v.reduce((x,y)=>x+y,0)/v.length : null;};
-    const last=[...curV].reverse().find(v=>v!=null);
-    const now=mean(curV), base=cmpV.length?mean(cmpV):null;
-
-    let delta='<span class="tdelta flat">&mdash;</span>';
-    if(now!=null && base!=null && base!==0){
-      const diff=now-base, pct=Math.round(Math.abs(diff)/base*100);
-      const cls=pct<2?'flat':(diff>0?'up':'down'), arw=cls==='flat'?'→':(diff>0?'▲':'▼');
-      delta='<span class="tdelta '+cls+'">'+arw+' '+pct+'%</span>';
+    // Hover reads the bucket under the cursor, from a transparent rect over the
+    // whole sparkline rather than the 2px line itself.
+    const valEl=card.querySelector('.metric');
+    if(valEl){
+      const restore={html:valEl.innerHTML, cls:valEl.className, style:valEl.getAttribute('style')||''};
+      const hit=svg.querySelector('.thit');
+      hit.addEventListener('mousemove',e=>{
+        const b=hit.getBoundingClientRect();
+        let i=Math.round((e.clientX-b.left)/b.width*(cs.length-1));
+        i=Math.max(0,Math.min(cs.length-1,i));
+        const row=cs[i]; if(!row||row[1]==null) return;
+        valEl.innerHTML=M.fmt(+row[1]);
+        valEl.setAttribute('style','color:var(--'+({good:'good',warn:'warn',poor:'poor'}[rate(m,+row[1])]||'ink')+')');
+      });
+      hit.addEventListener('mouseleave',()=>{ valEl.innerHTML=restore.html; valEl.className=restore.cls; valEl.setAttribute('style',restore.style); });
     }
-    const r=rate(m,last);
-    return '<div class="tcard" data-m="'+m+'">'+
-      '<div class="thead"><span class="tname">'+M.label+' p75</span>'+delta+'</div>'+
-      '<div class="tval '+r+'">'+M.fmt(last)+'</div>'+
-      '<svg class="tspark" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" role="img" aria-label="'+M.label+' trend">'+
-        '<defs><linearGradient id="g-'+m+'" x1="0" y1="0" x2="0" y2="1">'+
-          '<stop offset="0%" stop-color="'+M.color+'" stop-opacity=".26"/>'+
-          '<stop offset="100%" stop-color="'+M.color+'" stop-opacity="0"/>'+
-        '</linearGradient></defs>'+
-        (p.line?'<path d="'+p.line+'" fill="none" stroke="'+M.color+'" stroke-opacity=".55" stroke-width="1.4" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>':'')+
-        (c.area?'<path d="'+c.area+'" fill="url(#g-'+m+')"/>':'')+
-        '<path d="'+c.line+'" fill="none" stroke="'+M.color+'" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>'+
-        '<rect class="thit" x="0" y="0" width="'+W+'" height="'+H+'"/>'+
-      '</svg>'+
-      '<div class="tbase">'+(base!=null?'vs '+M.fmt(base)+' previous':'&nbsp;')+'</div>'+
-    '</div>';
-  }).join('');
+  });
+}
 
-  // Hover reads the bucket under the cursor. The listener sits on a transparent
-  // rect covering the whole sparkline, so it fires anywhere in the card rather
-  // than only when the pointer is exactly on a 2px line.
-  TREND_KEYS.forEach(m=>{
-    const card=box.querySelector('.tcard[data-m="'+m+'"]'); if(!card) return;
-    const S=series[m]||{}, cs=S.cs||[]; if(!cs.length) return;
-    const M=METRIC_META[m], val=card.querySelector('.tval'), sub=card.querySelector('.tbase');
-    const restore={val:val.innerHTML, sub:sub.innerHTML, cls:val.className};
-    const hit=card.querySelector('.thit');
-    hit.addEventListener('mousemove',e=>{
-      const b=hit.getBoundingClientRect();
-      let i=Math.round((e.clientX-b.left)/b.width*(cs.length-1));
-      i=Math.max(0,Math.min(cs.length-1,i));
-      const row=cs[i]; if(!row||row[1]==null) return;
-      val.innerHTML=M.fmt(+row[1]); val.className='tval '+rate(m,+row[1]);
-      sub.innerHTML=fmtLabel(row[0])+(row[2]!=null?' · '+(+row[2]).toLocaleString()+' views':'');
+// Value -> colour on the metric's own thresholds, so green and red mean the same
+// thing here as on the tiles. A per-window min/max scale would repaint a good
+// week in alarming red simply because one hour was worse than the others.
+function heatColor(metric,v){
+  if(v==null) return null;
+  const [g,p]=TH[metric];
+  if(v<=g){ const t=Math.max(0,Math.min(1,v/g)); return mixHex('#DCFCE7','#16A34A',0.25+t*0.75); }
+  if(v<=p){ const t=(v-g)/((p-g)||1);            return mixHex('#FEF3C7','#D97706',0.25+t*0.75); }
+  const t=Math.min(1,(v-p)/(p||1));              return mixHex('#FEE2E2','#DC2626',0.35+t*0.65);
+}
+function mixHex(a,b,t){
+  const h=s=>[parseInt(s.slice(1,3),16),parseInt(s.slice(3,5),16),parseInt(s.slice(5,7),16)];
+  const [r1,g1,b1]=h(a),[r2,g2,b2]=h(b);
+  const m=(x,y)=>Math.round(x+(y-x)*t);
+  return '#'+[m(r1,r2),m(g1,g2),m(b1,b2)].map(n=>n.toString(16).padStart(2,'0')).join('');
+}
+
+function drawHeatmap(cur,bucket,cs){
+  const box=document.getElementById('trendHeat'); if(!box) return;
+  const M=METRIC_META[hmMetric];
+  if(!cs || !cs.length){ box.innerHTML='<div class="empty" style="padding:16px">No data in this window.</div>'; return; }
+
+  // Three layouts, because one grid shape cannot serve every granularity.
+  //   day    -> a single strip, one cell per day
+  //   hour   -> days down, hours across: the view that shows a daily rhythm
+  //   minute -> hours down, five-minute slots across
+  let rows, cols, colLabel, rowLabel, keyOf;
+  if(bucket==='day'){
+    const days=[...new Set(cs.map(a=>new Date(a[0]).toDateString()))];
+    rows=['']; cols=days;
+    keyOf=a=>[0, days.indexOf(new Date(a[0]).toDateString())];
+    colLabel=d=>{const x=new Date(d); return (x.getMonth()+1)+'/'+x.getDate();};
+    rowLabel=()=>'';
+  } else if(bucket==='minute'){
+    const hours=[...new Set(cs.map(a=>{const d=new Date(a[0]); return d.toDateString()+' '+d.getHours();}))];
+    rows=hours; cols=Array.from({length:12},(_,i)=>i);
+    keyOf=a=>{const d=new Date(a[0]); return [hours.indexOf(d.toDateString()+' '+d.getHours()), Math.floor(d.getMinutes()/5)];};
+    colLabel=i=>(i%3===0?(i*5)+'m':'');
+    rowLabel=s=>{const [,,dd,,]=s.split(' '); const h=s.split(' ').pop(); return dd+' '+String(h).padStart(2,'0')+'h';};
+  } else {
+    const days=[...new Set(cs.map(a=>new Date(a[0]).toDateString()))];
+    rows=days; cols=Array.from({length:24},(_,i)=>i);
+    keyOf=a=>{const d=new Date(a[0]); return [days.indexOf(d.toDateString()), d.getHours()];};
+    colLabel=h=>(h%3===0?String(h).padStart(2,'0'):'');
+    rowLabel=s=>{const d=new Date(s); return (d.getMonth()+1)+'/'+d.getDate();};
+  }
+
+  // Several buckets can land in one cell (minute buckets inside an hour). Average
+  // them rather than letting the last one win, which would hide a bad spike.
+  const cell={};
+  cs.forEach(a=>{
+    if(a[1]==null) return;
+    const [r,c]=keyOf(a); if(r<0||c<0) return;
+    const k=r+':'+c; (cell[k]=cell[k]||{sum:0,n:0,views:0});
+    cell[k].sum+=+a[1]; cell[k].n++; cell[k].views+=(+a[2]||0);
+  });
+
+  const html=[];
+  html.push('<div class="hmgrid" style="grid-template-columns:52px repeat('+cols.length+',1fr)">');
+  html.push('<div></div>');
+  cols.forEach(c=>html.push('<div class="hmcollab">'+colLabel(c)+'</div>'));
+  rows.forEach((r,ri)=>{
+    html.push('<div class="hmrowlab">'+rowLabel(r)+'</div>');
+    cols.forEach((c,ci)=>{
+      const d=cell[ri+':'+ci];
+      if(!d){ html.push('<div class="hmcell na"></div>'); return; }
+      const v=d.sum/d.n;
+      html.push('<div class="hmcell" style="background:'+heatColor(hmMetric,v)+'"'+
+        ' data-v="'+v+'" data-views="'+d.views+'" data-lab="'+
+        (rowLabel(r)?rowLabel(r)+' ':'')+(bucket==='day'?colLabel(c):String(colLabel(c)||c)+(bucket==='hour'?':00':'m'))+'"></div>');
     });
-    hit.addEventListener('mouseleave',()=>{ val.innerHTML=restore.val; val.className=restore.cls; sub.innerHTML=restore.sub; });
+  });
+  html.push('</div>');
+  box.innerHTML=html.join('');
+
+  const [g,p]=TH[hmMetric];
+  const leg=document.getElementById('hmLegend');
+  if(leg) leg.innerHTML='<span class="hmscale">'+
+    '<span class="hmswatch" style="background:'+heatColor(hmMetric,g*0.5)+'"></span>good ≤'+M.fmt(g)+
+    '<span class="hmswatch" style="background:'+heatColor(hmMetric,(g+p)/2)+';margin-left:8px"></span>needs work'+
+    '<span class="hmswatch" style="background:'+heatColor(hmMetric,p*1.5)+';margin-left:8px"></span>poor >'+M.fmt(p)+
+    '</span>';
+
+  let tip=document.getElementById('hmTip2');
+  if(!tip){ tip=document.createElement('div'); tip.id='hmTip2'; tip.className='hmtip'; document.body.appendChild(tip); }
+  box.querySelectorAll('.hmcell[data-v]').forEach(el=>{
+    el.addEventListener('mousemove',e=>{
+      const v=+el.dataset.v, n=+el.dataset.views;
+      tip.innerHTML='<b>'+M.fmt(v)+'</b> '+M.label+' p75<br>'+el.dataset.lab+
+                    (n?'<br>'+n.toLocaleString()+' views':'');
+      tip.classList.add('on');
+      tip.style.left=Math.min(window.innerWidth-190,e.clientX+14)+'px';
+      tip.style.top=(e.clientY-46)+'px';
+    });
+    el.addEventListener('mouseleave',()=>tip.classList.remove('on'));
   });
 }
 
 function initTrendControls(){
-  // The metric tabs are gone — all five render at once, so there is nothing
-  // left to wire here. Granularity is handled by onTrendGran().
+  document.querySelectorAll('#hmMetric button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('#hmMetric button').forEach(x=>x.classList.toggle('on',x===b));
+    hmMetric=b.dataset.m;
+    const cur=windowRange(), cmp=comparisonRange(cur,(document.getElementById('cmpSel')||{}).value||'prev');
+    updateTrend(cur,cmp);
+  });
 }
 function onTrendGran(){
   trendBucket=document.getElementById('trendGran').value;
