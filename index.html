@@ -222,6 +222,22 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
 .delta .base{color:var(--faint);font-weight:400;margin-left:3px}
 /* interactive trend controls */
 .trendbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.trendkey{margin-left:auto;font-size:11px;color:var(--faint);letter-spacing:.02em}
+/* Five metrics side by side. auto-fit rather than a fixed five columns so the
+   row reflows to 3, 2 and 1 as the screen narrows instead of squeezing five
+   unreadable sparklines onto a phone. */
+.trendgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+.tcard{border:1px solid var(--line);border-radius:10px;padding:11px 12px 8px;background:var(--card,#fff)}
+.tcard .thead{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.tcard .tname{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.tcard .tval{font-size:19px;font-weight:650;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.tcard .tval.good{color:var(--good)}.tcard .tval.warn{color:var(--warn)}.tcard .tval.poor{color:var(--poor)}
+.tcard .tdelta{font-size:11px;font-weight:600;white-space:nowrap}
+.tcard .tdelta.up{color:var(--poor)}.tcard .tdelta.down{color:var(--good)}.tcard .tdelta.flat{color:var(--faint)}
+.tcard .tspark{margin-top:7px;display:block;width:100%;height:52px;overflow:visible}
+.tcard .tbase{font-size:10.5px;color:var(--faint);margin-top:2px}
+.tcard .thit{fill:transparent;cursor:crosshair}
+.tcard.dim{opacity:.55}
 .segs.sm button{padding:5px 11px;font-size:12px}
 .gransel{margin-left:auto;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-family:inherit;font-size:12px;background:var(--surface);color:var(--muted)}
 /* audience card header + pivot button + pivot table */
@@ -503,9 +519,6 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
         <div class="section-h"><h2>Real-user trend</h2><span id="sumRange">last 7 days</span></div>
         <div class="card">
           <div class="trendbar">
-            <div class="segs sm" id="trendMetric">
-              <button data-m="lcp" class="on">LCP</button><button data-m="inp">INP</button><button data-m="cls">CLS</button><button data-m="fcp">FCP</button><button data-m="ttfb">TTFB</button>
-            </div>
             <div class="dd gransel-wrap" id="ddGran"></div>
             <select id="trendGran" style="display:none" onchange="onTrendGran()">
               <option value="auto">granularity: auto</option>
@@ -513,8 +526,12 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
               <option value="hour">by hour</option>
               <option value="day">by day</option>
             </select>
+            <span class="trendkey">— this period &nbsp;·&nbsp; ---- previous</span>
           </div>
-          <div class="chartbox" style="height:230px"><canvas id="trendChart"></canvas></div>
+          <!-- All five metrics at once. The tabs that used to sit here showed one
+               metric and hid four, so a regression in TTFB stayed invisible while
+               you were looking at LCP. -->
+          <div class="trendgrid" id="trendGrid"></div>
         </div>
         <div class="section-h"><h2>Audience &amp; network</h2><span id="audRange"></span></div>
         <div class="grid g4 audience" id="audienceGrid"></div>
@@ -2613,7 +2630,7 @@ function paintSummary(cur,cmp,S,B){
 }
 function cellHTML(metric,v,f){const rt=rate(metric,v);return `<td class="cell"><span class="cellval ${rt}">${f(v)}</span></td>`;}
 /* ---- interactive trend: metric switch · granularity · hover tooltip · dashed comparison ---- */
-let trendMetric='lcp', trendBucket='auto';
+let trendBucket='auto';   // no trendMetric: every metric is drawn every time now
 const METRIC_META={
   lcp: {label:'LCP', color:'#4F46E5', div:1000, unit:'s', fmt:v=>fmtMs(v)},
   inp: {label:'INP', color:'#7C3AED', div:1,    unit:'ms',fmt:v=>fmtMs(v)},
@@ -2645,62 +2662,132 @@ async function fetchTrend(from,to,bucket,metric){
   return run;
 }
 let trendToken=0;
+const TREND_KEYS=['lcp','inp','cls','fcp','ttfb'];
+
+// All five metrics, not one. Ten cached calls rather than two, which is why the
+// per-metric cache inside fetchTrend matters more here than it did with tabs.
 async function updateTrend(cur,cmp){
   const my=++trendToken;
   const bucket = trendBucket==='auto'?autoBucket(cur.from,cur.to):trendBucket;
-  const [cs,ps]=await Promise.all([
-    fetchTrend(cur.from,cur.to,bucket,trendMetric),
-    cmp?fetchTrend(cmp.from,cmp.to,bucket,trendMetric):Promise.resolve(null)
-  ]);
+  const series = await Promise.all(TREND_KEYS.map(async m => {
+    const [cs,ps] = await Promise.all([
+      fetchTrend(cur.from,cur.to,bucket,m),
+      cmp?fetchTrend(cmp.from,cmp.to,bucket,m):Promise.resolve(null)
+    ]);
+    return [m,{cs,ps}];
+  }));
   if(my!==trendToken) return;                 // a newer request superseded this one
-  drawTrend2(cur,cmp,bucket,cs,ps);
+  drawTrendGrid(cur,cmp,bucket,Object.fromEntries(series));
 }
-function drawTrend2(cur,cmp,bucket,cs,ps){
-  const M=METRIC_META[trendMetric];
-  const ctx=document.getElementById('trendChart'); if(!ctx)return;
-  const fmtLabel=(ts)=>{const d=new Date(ts); return bucket==='day'?((d.getMonth()+1)+'/'+d.getDate()):bucket==='minute'?(d.getHours()+':'+String(d.getMinutes()).padStart(2,'0')):(d.getMonth()+1)+'/'+d.getDate()+' '+d.getHours()+'h';};
-  let labels, cur_d, cmp_d, counts;
-  if(cs && cs.length){
-    labels=cs.map(a=>fmtLabel(a[0]));
-    cur_d=cs.map(a=>a[1]==null?null:+(+a[1]/M.div).toFixed(M.div>1?2:0));
-    counts=cs.map(a=>a[2]);
-    cmp_d = (cmp&&ps&&ps.length) ? cs.map((_,i)=>{const p=ps[i]; return p&&p[1]!=null?+(+p[1]/M.div).toFixed(M.div>1?2:0):null;}) : null;
-  }else{
-    // fallback: client rows (truncated) — clearly a degraded path
-    const rows=rowsIn(cur.from,cur.to), N=24, span=(cur.to-cur.from)/N||1, b=Array.from({length:N},()=>[]);
-    rows.forEach(r=>{let i=Math.floor((+new Date(r.created_at)-cur.from)/span); if(i<0)i=0;if(i>=N)i=N-1; if(r[trendMetric]!=null)b[i].push(r[trendMetric]);});
-    labels=b.map((_,i)=>fmtLabel(cur.from+span*(i+0.5))); cur_d=b.map(x=>{const v=p75(x);return v==null?null:+(v/M.div).toFixed(M.div>1?2:0);}); counts=b.map(x=>x.length); cmp_d=null;
-  }
-  const g=ctx.getContext('2d'); const grad=g.createLinearGradient(0,0,0,230);
-  grad.addColorStop(0, M.color+'44'); grad.addColorStop(1, M.color+'05');
-  const ds=[{label:M.label,data:cur_d,borderColor:M.color,backgroundColor:grad,fill:true,tension:.4,pointRadius:0,pointHoverRadius:5,pointHoverBackgroundColor:M.color,borderWidth:2.5,spanGaps:true,_counts:counts}];
-  if(cmp_d) ds.push({label:cmp.label||'previous',data:cmp_d,borderColor:M.color+'99',borderDash:[5,4],backgroundColor:'transparent',fill:false,tension:.4,pointRadius:0,pointHoverRadius:4,borderWidth:1.6,spanGaps:true});
-  if(charts.trend)charts.trend.destroy();
-  charts.trend=new Chart(ctx,{type:'line',data:{labels,datasets:ds},options:{
-    maintainAspectRatio:false,
-    interaction:{intersect:false,mode:'index'},
-    plugins:{legend:{display:!!cmp_d,labels:{boxWidth:10,font:{size:10},color:'#616B7C',usePointStyle:true}},
-      tooltip:{backgroundColor:'#0E1728',padding:11,cornerRadius:9,titleFont:{size:11},bodyFont:{size:12,weight:'600'},displayColors:false,
-        callbacks:{
-          title:(items)=>items.length?labels[items[0].dataIndex]:'',
-          label:(item)=>{const raw=item.raw; if(raw==null)return M.label+': no data';
-            const real=raw*M.div; const txt=M.fmt(real);
-            if(item.datasetIndex===0){const n=counts[item.dataIndex]; return `${M.label} p75: ${txt}` + (n!=null?`  ·  ${(+n).toLocaleString()} views`:'');}
-            return `${M.label} (prev): ${txt}`;
-          }
-        }}},
-    scales:{x:{grid:{display:false},ticks:{font:{size:9},color:'#9AA3B2',maxRotation:0,autoSkip:true,maxTicksLimit:9}},
-            y:{grid:{color:'#F0F1F4'},ticks:{font:{size:10},color:'#9AA3B2',callback:v=>(Math.round(v*100)/100)+(M.unit||'')}}}
-  }});
-  const h3=document.querySelector('[data-view="summary"] .card h3'); // (trend card has no h3 now — controls instead)
-}
-function initTrendControls(){
-  document.querySelectorAll('#trendMetric button').forEach(b=>b.onclick=()=>{
-    document.querySelectorAll('#trendMetric button').forEach(x=>x.classList.toggle('on',x===b));
-    trendMetric=b.dataset.m;
-    const cur=windowRange(), cmp=comparisonRange(cur,(document.getElementById('cmpSel')||{}).value||'prev');
-    updateTrend(cur,cmp);
+
+// Sparklines are hand-drawn SVG rather than five Chart.js instances. Chart.js
+// would mean destroying and rebuilding five canvases on every live refresh —
+// exactly the restart flicker this dashboard was asked not to do — and five
+// chart objects is a lot of machinery to draw five paths.
+function sparkPath(vals,w,h,lo,hi){
+  const pts=[];
+  const step = vals.length>1 ? w/(vals.length-1) : w;
+  // Inset the plot. A Catmull-Rom curve overshoots its own points, and drawing
+  // edge to edge pushed LCP's peak to y=-4.3 — outside the box and into the
+  // value text above it.
+  const PAD=5, top=PAD, usable=h-PAD*2;
+  const flat = !(hi>lo);
+  vals.forEach((v,i)=>{
+    if(v==null) return;
+    // Every value identical is a steady metric, not a zero one. Without this it
+    // drew along the very bottom edge, which reads as broken — CLS sat at
+    // 0.0025 all week and looked like it had flatlined at nothing.
+    const y = flat ? top+usable/2 : top + usable - ((v-lo)/(hi-lo))*usable;
+    pts.push([i*step, y]);
   });
+  if(!pts.length) return {line:'',area:''};
+  // Catmull-Rom through the points, so the line curves the way the old chart
+  // did instead of showing every bucket as a hard corner.
+  let d='M'+pts[0][0].toFixed(1)+','+pts[0][1].toFixed(1);
+  for(let i=0;i<pts.length-1;i++){
+    const p0=pts[i-1]||pts[i], p1=pts[i], p2=pts[i+1], p3=pts[i+2]||p2;
+    const c1=[p1[0]+(p2[0]-p0[0])/6, p1[1]+(p2[1]-p0[1])/6];
+    const c2=[p2[0]-(p3[0]-p1[0])/6, p2[1]-(p3[1]-p1[1])/6];
+    d+='C'+c1[0].toFixed(1)+','+c1[1].toFixed(1)+' '+c2[0].toFixed(1)+','+c2[1].toFixed(1)+' '+p2[0].toFixed(1)+','+p2[1].toFixed(1);
+  }
+  const area=d+'L'+pts[pts.length-1][0].toFixed(1)+','+h+'L'+pts[0][0].toFixed(1)+','+h+'Z';
+  return {line:d,area};
+}
+
+function drawTrendGrid(cur,cmp,bucket,series){
+  const box=document.getElementById('trendGrid'); if(!box) return;
+  const W=200,H=52;
+  const fmtLabel=(ts)=>{const d=new Date(ts); return bucket==='day'?((d.getMonth()+1)+'/'+d.getDate()):bucket==='minute'?(d.getHours()+':'+String(d.getMinutes()).padStart(2,'0')):(d.getMonth()+1)+'/'+d.getDate()+' '+d.getHours()+'h';};
+
+  box.innerHTML = TREND_KEYS.map(m => {
+    const M=METRIC_META[m], S=series[m]||{};
+    const cs=S.cs||[], ps=S.ps||[];
+    if(!cs.length) return '<div class="tcard dim"><div class="thead"><span class="tname">'+M.label+'</span></div>'+
+      '<div class="tval">&mdash;</div><div class="tbase">no data in this window</div></div>';
+
+    const curV = cs.map(a=>a[1]==null?null:+a[1]);
+    const cmpV = ps.length ? cs.map((_,i)=>{const p=ps[i]; return p&&p[1]!=null?+p[1]:null;}) : [];
+
+    // One scale for both lines. Scaling them separately would draw a flat
+    // previous period beside a dramatic current one from identical numbers.
+    const all=[...curV,...cmpV].filter(v=>v!=null);
+    if(!all.length) return '<div class="tcard dim"><div class="thead"><span class="tname">'+M.label+'</span></div>'+
+      '<div class="tval">&mdash;</div><div class="tbase">no data in this window</div></div>';
+    const lo=Math.min.apply(null,all), hi=Math.max.apply(null,all);
+    const c=sparkPath(curV,W,H,lo,hi), p=sparkPath(cmpV,W,H,lo,hi);
+
+    const mean=(a)=>{const v=a.filter(x=>x!=null); return v.length? v.reduce((x,y)=>x+y,0)/v.length : null;};
+    const last=[...curV].reverse().find(v=>v!=null);
+    const now=mean(curV), base=cmpV.length?mean(cmpV):null;
+
+    let delta='<span class="tdelta flat">&mdash;</span>';
+    if(now!=null && base!=null && base!==0){
+      const diff=now-base, pct=Math.round(Math.abs(diff)/base*100);
+      const cls=pct<2?'flat':(diff>0?'up':'down'), arw=cls==='flat'?'→':(diff>0?'▲':'▼');
+      delta='<span class="tdelta '+cls+'">'+arw+' '+pct+'%</span>';
+    }
+    const r=rate(m,last);
+    return '<div class="tcard" data-m="'+m+'">'+
+      '<div class="thead"><span class="tname">'+M.label+' p75</span>'+delta+'</div>'+
+      '<div class="tval '+r+'">'+M.fmt(last)+'</div>'+
+      '<svg class="tspark" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" role="img" aria-label="'+M.label+' trend">'+
+        '<defs><linearGradient id="g-'+m+'" x1="0" y1="0" x2="0" y2="1">'+
+          '<stop offset="0%" stop-color="'+M.color+'" stop-opacity=".26"/>'+
+          '<stop offset="100%" stop-color="'+M.color+'" stop-opacity="0"/>'+
+        '</linearGradient></defs>'+
+        (p.line?'<path d="'+p.line+'" fill="none" stroke="'+M.color+'" stroke-opacity=".55" stroke-width="1.4" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>':'')+
+        (c.area?'<path d="'+c.area+'" fill="url(#g-'+m+')"/>':'')+
+        '<path d="'+c.line+'" fill="none" stroke="'+M.color+'" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>'+
+        '<rect class="thit" x="0" y="0" width="'+W+'" height="'+H+'"/>'+
+      '</svg>'+
+      '<div class="tbase">'+(base!=null?'vs '+M.fmt(base)+' previous':'&nbsp;')+'</div>'+
+    '</div>';
+  }).join('');
+
+  // Hover reads the bucket under the cursor. The listener sits on a transparent
+  // rect covering the whole sparkline, so it fires anywhere in the card rather
+  // than only when the pointer is exactly on a 2px line.
+  TREND_KEYS.forEach(m=>{
+    const card=box.querySelector('.tcard[data-m="'+m+'"]'); if(!card) return;
+    const S=series[m]||{}, cs=S.cs||[]; if(!cs.length) return;
+    const M=METRIC_META[m], val=card.querySelector('.tval'), sub=card.querySelector('.tbase');
+    const restore={val:val.innerHTML, sub:sub.innerHTML, cls:val.className};
+    const hit=card.querySelector('.thit');
+    hit.addEventListener('mousemove',e=>{
+      const b=hit.getBoundingClientRect();
+      let i=Math.round((e.clientX-b.left)/b.width*(cs.length-1));
+      i=Math.max(0,Math.min(cs.length-1,i));
+      const row=cs[i]; if(!row||row[1]==null) return;
+      val.innerHTML=M.fmt(+row[1]); val.className='tval '+rate(m,+row[1]);
+      sub.innerHTML=fmtLabel(row[0])+(row[2]!=null?' · '+(+row[2]).toLocaleString()+' views':'');
+    });
+    hit.addEventListener('mouseleave',()=>{ val.innerHTML=restore.val; val.className=restore.cls; sub.innerHTML=restore.sub; });
+  });
+}
+
+function initTrendControls(){
+  // The metric tabs are gone — all five render at once, so there is nothing
+  // left to wire here. Granularity is handled by onTrendGran().
 }
 function onTrendGran(){
   trendBucket=document.getElementById('trendGran').value;
