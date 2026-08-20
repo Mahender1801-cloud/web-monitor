@@ -1,0 +1,34 @@
+-- ============================================================================
+-- Remove a duplicate recent_visitors(). Run once in Supabase -> SQL Editor.
+--
+-- Two versions exist:
+--   recent_visitors(p_from, p_to, p_limit)
+--   recent_visitors(p_from, p_to, p_limit, p_offset)
+--
+-- The paged one was added later and the original was never dropped. PostgREST
+-- resolves an overload by the argument names it is given, so any call that
+-- omits p_offset matches both and fails outright:
+--
+--   "Could not choose the best candidate function between:
+--    public.recent_visitors(p_from, p_to, p_limit),
+--    public.recent_visitors(p_from, p_to, p_limit, p_offset)"
+--
+-- The dashboard happens to always send p_offset, so the Visitors view works and
+-- this has been invisible. It is one forgotten argument away from breaking, and
+-- it breaks with an error about function resolution rather than anything that
+-- points at visitors — so it is worth removing rather than remembering.
+--
+-- Verified against the live database: calling without p_offset returns the
+-- ambiguity error today; calling with it returns rows.
+-- ============================================================================
+
+drop function if exists public.recent_visitors(timestamptz, timestamptz, integer);
+
+-- Confirm exactly one remains, taking four arguments:
+--   select p.oid::regprocedure
+--   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+--   where n.nspname = 'public' and p.proname = 'recent_visitors';
+--
+-- Then confirm the call the dashboard makes still works, and that the shorter
+-- one now fails cleanly with "function does not exist" instead of ambiguously:
+--   select public.recent_visitors(now() - interval '7 days', now(), 200, 0);
