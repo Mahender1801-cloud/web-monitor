@@ -221,6 +221,21 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
 .delta.up{color:var(--poor)}.delta.down{color:var(--good)}.delta.flat{color:var(--faint)}
 .delta .base{color:var(--faint);font-weight:400;margin-left:3px}
 /* interactive trend controls */
+/* QA accordion: ten categories on one page, each summarised in its header so
+   the whole checklist can be read without opening anything. */
+.qasec{border:1px solid var(--line);border-radius:10px;margin-bottom:8px;background:var(--card,#fff);overflow:hidden}
+.qahead{display:flex;align-items:center;gap:10px;width:100%;padding:12px 14px;background:none;border:0;
+  cursor:pointer;text-align:left;font:inherit;color:inherit}
+.qahead:hover{background:rgba(0,0,0,.02)}
+.qacaret{width:12px;color:var(--faint);font-size:11px}
+.qaicon{font-size:14px}
+.qatitle{font-weight:600;font-size:13.5px}
+.qacounts{margin-left:auto;font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:7px;white-space:nowrap}
+.qadot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.qadot.good{background:var(--good)}.qadot.warn{background:var(--warn)}.qadot.poor{background:var(--poor)}
+.qaattn{color:var(--poor);font-weight:600}
+.qasec .qabody{border-top:1px solid var(--line)}
+.qasec:not(.open) .qabody{display:none}
 .trendbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
 .trendkey{margin-left:auto;font-size:11px;color:var(--faint);letter-spacing:.02em}
 /* Sparkline inside each KPI tile: the number says where the metric is, the line
@@ -233,7 +248,9 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
    and a 7-column daily one both fill the width without leaving a gutter. */
 .hmwrap{overflow-x:auto}
 .hmgrid{display:grid;gap:2px;min-width:520px}
-.hmcell{aspect-ratio:1/.62;border-radius:3px;cursor:crosshair;position:relative}
+/* Half the previous height. Cells that tall pushed a week of hours past the
+   fold, so the pattern the heatmap exists to show needed scrolling to see. */
+.hmcell{aspect-ratio:1/.31;min-height:14px;border-radius:2px;cursor:crosshair;position:relative}
 .hmcell.na{background:repeating-linear-gradient(45deg,#F3F4F6 0 4px,#FAFAFB 4px 8px)}
 .hmrowlab{font-size:10px;color:var(--muted);display:flex;align-items:center;justify-content:flex-end;padding-right:6px;white-space:nowrap}
 .hmcollab{font-size:9.5px;color:var(--faint);text-align:center;padding-bottom:3px;white-space:nowrap}
@@ -500,25 +517,30 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
         <span>●</span><div><b>Sample data.</b> You're seeing generated numbers. Click <b>Connect</b>, paste your Supabase URL + anon key, and everything below goes live.</div>
       </div>
 
+      <!-- The range bar lives in the shell, not inside Summary. Every view
+           already reads windowRange(); the control being trapped in one of
+           them meant the other nine silently used a window nobody could see
+           or change. -->
+        <div class="rangebar">
+        <div class="segs" id="rangeSegs">
+          <button data-range="today" class="on">Today</button>
+          <button data-range="yesterday">Yesterday</button>
+          <button data-range="7d">7 days</button>
+          <button data-range="30d">30 days</button>
+          <button data-range="90d">90 days</button>
+          <button data-range="all">All</button>
+        </div>
+        <input type="date" id="rangeFrom" style="display:none"><input type="date" id="rangeTo" style="display:none">
+        <button class="dd-btn" id="calBtn" onclick="openCal(event)">
+          <span>📅</span><span id="calLabel">Custom range</span><span class="dd-caret">▾</span>
+        </button>
+        <div class="cmp">
+          <label>Compare vs</label>
+          <div class="dd" id="ddCmp"></div>
+        </div>
+      </div>
       <!-- SUMMARY -->
       <section class="view on" data-view="summary">
-        <div class="rangebar">
-          <div class="segs" id="rangeSegs">
-            <button data-range="24h">24h</button>
-            <button data-range="7d" class="on">7 days</button>
-            <button data-range="30d">30 days</button>
-            <button data-range="90d">90 days</button>
-            <button data-range="all">All</button>
-          </div>
-          <input type="date" id="rangeFrom" style="display:none"><input type="date" id="rangeTo" style="display:none">
-          <button class="dd-btn" id="calBtn" onclick="openCal(event)">
-            <span>📅</span><span id="calLabel">Custom range</span><span class="dd-caret">▾</span>
-          </button>
-          <div class="cmp">
-            <label>Compare vs</label>
-            <div class="dd" id="ddCmp"></div>
-          </div>
-        </div>
         <div class="grid g5" id="sumTiles"></div>
         <div class="section-h"><h2>Real-user trend</h2><span id="sumRange">last 7 days</span></div>
         <div class="card">
@@ -763,7 +785,11 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
           <span id="taskDesc" style="color:var(--muted);font-size:12.5px"></span>
           <button class="btn pri" style="margin-left:auto" onclick="runCategoryChecks()">▶ Run auto checks</button>
         </div>
-        <div class="card" style="padding:0" id="taskList"></div>
+        <!-- All ten categories on one page as collapsible sections. Each header
+             carries its own pass/attention/pending counts, so the state of the
+             whole checklist is readable without opening anything. -->
+        <div id="qaAccordion"></div>
+        <div class="card" style="padding:0;display:none" id="taskList"></div>
         <p style="color:var(--faint);font-size:11.5px;margin-top:12px">
           <span class="autobadge">AUTO</span> checks run server-side 5×/day via GitHub Actions and on demand.
           <span class="autobadge man">MANUAL</span> checks are visual — toggle them Pass / Attention after you eyeball the page. Server-only probes (SSL, robots, meta) can't run from the browser, so <b>Run auto checks</b> refreshes PageSpeed live and flags the rest to the next scheduled run.
@@ -913,8 +939,10 @@ function buildNav(){
     ${navBtn('report','Report','📄')}
     ${navBtn('monitors','Monitors','🔗')}
     ${navBtn('webscore','Web Score','🎯')}
-    <h4>QA Tasks</h4>`;
-  TASK_CATS.forEach(c=> h+=navBtn('cat:'+c, c.replace(' Testing',''), CAT_ICON[c]||'•', true));
+    <h4>QA Tasks</h4>` + navBtn('qa','QA Tasks','✅');
+  // Ten sidebar entries became one. They were ten links to the same page with a
+  // different filter, and they pushed the monitoring views off the top of a
+  // laptop screen. The categories are sections inside the page now.
   el.innerHTML=h;
 }
 function navBtn(id,label,ic,isCat){
@@ -923,7 +951,14 @@ function navBtn(id,label,ic,isCat){
 }
 function go(id){
   document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('on', n.dataset.nav===id));
-  if(id.startsWith('cat:')){ curView='task'; curCat=id.slice(4); showView('task'); renderTask(); setTitle(curCat.replace(' Testing',''), 'Runs 5×/day · toggle manual checks as you verify'); }
+  // 'qa' is the single entry now. 'cat:' is still accepted so an old bookmark
+  // lands on the right page with that category already expanded.
+  if(id==='qa'||id.startsWith('cat:')){
+    curView='task';
+    if(id.startsWith('cat:')) qaOpen.add(id.slice(4));
+    showView('task'); renderTask();
+    setTitle('QA Tasks','Auto checks run 5×/day · open a section to review or mark its manual checks');
+  }
   else {
     curView=id; showView(id); setTitle(TITLES[id][0], TITLES[id][1]);
     renderView(id);                                  // paint immediately with what we have
@@ -977,7 +1012,7 @@ function toggleSide(force){
 const TITLES={summary:['Summary','Real-user performance across the store'],webvitals:['Web Vitals','Live from your visitors · PageSpeed as cross-check'],live:['Live Data','Raw events streaming from real visitors'],purchases:['Purchases','Real orders · what each buyer actually experienced'],visitors:['Visitors','Every visitor’s footprint · pages, time, source · click to see their path'],health:['Health','Anomalies, breakage, vendors, catalog &amp; the real purchase path'],brands:['Top brands','How this store compares with the leading eyewear retailers'],report:['Report','A brief you can send — findings, cost, and the next three actions'],monitors:['Monitors','Per-page Web Vitals by device · 10-day daily sparklines'],webscore:['Web Score','Score & compare any URL — no PageSpeed API needed']};
 function setTitle(t,s){document.getElementById('vtitle').textContent=t;document.getElementById('vsub').textContent=s;}
 function showView(v){document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on', s.dataset.view===v));}
-function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderCWV();renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='purchases')renderPurchases(); if(v==='visitors')renderVisitors(); if(v==='health')renderHealth(); if(v==='brands')renderBrands(); if(v==='report')renderReport(); if(v==='monitors')renderMonitors(); if(v==='webscore')renderWebScore(); }
+function renderView(v){ if(v==='summary')renderSummary(); if(v==='webvitals'){renderCWV();renderWVLive();renderWV();} if(v==='live')renderLive(); if(v==='purchases')renderPurchases(); if(v==='visitors')renderVisitors(); if(v==='health')renderHealth(); if(v==='brands')renderBrands(); if(v==='report')renderReport(); if(v==='monitors')renderMonitors(); if(v==='webscore')renderWebScore(); if(v==='task')renderTask(); }
 
 /* ===================== WEB SCORE (scores any URL via /api/score, no PSI API) === */
 const scoreColor=s=>s==null?'na':(s>=90?'good':s>=50?'warn':'poor');
@@ -2480,7 +2515,10 @@ function latestChecks(){
 
 /* ===================== SUMMARY (date-windowed + comparison) ================== */
 const DAY=86400000;
-let RANGE={preset:'7d',from:null,to:null};
+// Opens on today. "Last 24 hours" was a rolling window that straddled midnight,
+// so the number never matched what anyone else in the business was looking at;
+// "today" is the same day everyone else means.
+let RANGE={preset:'today',from:null,to:null};
 // Quantise "now" to the minute so the window (and therefore the stats cache key)
 // is stable between renders — otherwise every realtime tick refetches and reflashes.
 function nowQ(){ return Math.floor(Date.now()/60000)*60000; }
@@ -2491,8 +2529,20 @@ function windowRange(){
     return {from:new Date(RANGE.from+'T00:00:00').getTime(),to,label:RANGE.from+' → '+(RANGE.to||'now')};
   }
   if(RANGE.preset==='all') return {from:0,to:now,label:'all time'};
-  const map={'24h':1,'7d':7,'30d':30,'90d':90}, d=map[RANGE.preset]||7;
-  return {from:now-d*DAY,to:now,label:RANGE.preset==='24h'?'last 24 hours':'last '+d+' days'};
+  // Calendar days, anchored to midnight rather than rolling back from the
+  // current minute. A rolling 24h window at 2pm is half yesterday, which is why
+  // its totals never agreed with anyone else's "today".
+  if(RANGE.preset==='today'){
+    const s=new Date(); s.setHours(0,0,0,0);
+    return {from:s.getTime(),to:now,label:'today'};
+  }
+  if(RANGE.preset==='yesterday'){
+    const s=new Date(); s.setHours(0,0,0,0); s.setDate(s.getDate()-1);
+    const e=new Date(s); e.setDate(e.getDate()+1);
+    return {from:s.getTime(),to:e.getTime()-1,label:'yesterday'};
+  }
+  const map={'7d':7,'30d':30,'90d':90}, d=map[RANGE.preset]||7;
+  return {from:now-d*DAY,to:now,label:'last '+d+' days'};
 }
 function comparisonRange(cur,mode){
   const now=nowQ(), len=cur.to-cur.from;
@@ -2810,25 +2860,31 @@ function drawHeatmap(cur,bucket,cs){
   //   day    -> a single strip, one cell per day
   //   hour   -> days down, hours across: the view that shows a daily rhythm
   //   minute -> hours down, five-minute slots across
-  let rows, cols, colLabel, rowLabel, keyOf;
+  // cellLabel is separate from the axis labels on purpose. Reusing colLabel for
+  // the tooltip produced "15mm" (it already ends in m) and "4m" for a blank
+  // axis label, where 4 was the column index rather than a number of minutes.
+  let rows, cols, colLabel, rowLabel, cellLabel, keyOf;
   if(bucket==='day'){
     const days=[...new Set(cs.map(a=>new Date(a[0]).toDateString()))];
     rows=['']; cols=days;
     keyOf=a=>[0, days.indexOf(new Date(a[0]).toDateString())];
     colLabel=d=>{const x=new Date(d); return (x.getMonth()+1)+'/'+x.getDate();};
     rowLabel=()=>'';
+    cellLabel=(r,c)=>colLabel(c);
   } else if(bucket==='minute'){
     const hours=[...new Set(cs.map(a=>{const d=new Date(a[0]); return d.toDateString()+' '+d.getHours();}))];
     rows=hours; cols=Array.from({length:12},(_,i)=>i);
     keyOf=a=>{const d=new Date(a[0]); return [hours.indexOf(d.toDateString()+' '+d.getHours()), Math.floor(d.getMinutes()/5)];};
     colLabel=i=>(i%3===0?(i*5)+'m':'');
-    rowLabel=s=>{const [,,dd,,]=s.split(' '); const h=s.split(' ').pop(); return dd+' '+String(h).padStart(2,'0')+'h';};
+    rowLabel=s=>{const p=s.split(' '); return p[1]+' '+p[2]+' '+String(p[3]).padStart(2,'0')+'h';};
+    cellLabel=(r,c)=>rowLabel(r)+' '+String(c*5).padStart(2,'0')+'-'+String(c*5+4).padStart(2,'0')+'min';
   } else {
     const days=[...new Set(cs.map(a=>new Date(a[0]).toDateString()))];
     rows=days; cols=Array.from({length:24},(_,i)=>i);
     keyOf=a=>{const d=new Date(a[0]); return [days.indexOf(d.toDateString()), d.getHours()];};
     colLabel=h=>(h%3===0?String(h).padStart(2,'0'):'');
     rowLabel=s=>{const d=new Date(s); return (d.getMonth()+1)+'/'+d.getDate();};
+    cellLabel=(r,c)=>rowLabel(r)+' '+String(c).padStart(2,'0')+':00';
   }
 
   // Several buckets can land in one cell (minute buckets inside an hour). Average
@@ -2852,8 +2908,7 @@ function drawHeatmap(cur,bucket,cs){
       if(!d){ html.push('<div class="hmcell na"></div>'); return; }
       const v=d.sum/d.n;
       html.push('<div class="hmcell" style="background:'+heatColor(hmMetric,v)+'"'+
-        ' data-v="'+v+'" data-views="'+d.views+'" data-lab="'+
-        (rowLabel(r)?rowLabel(r)+' ':'')+(bucket==='day'?colLabel(c):String(colLabel(c)||c)+(bucket==='hour'?':00':'m'))+'"></div>');
+        ' data-v="'+v+'" data-views="'+d.views+'" data-lab="'+cellLabel(r,c)+'"></div>');
     });
   });
   html.push('</div>');
@@ -2895,11 +2950,19 @@ function onTrendGran(){
   const cur=windowRange(), cmp=comparisonRange(cur,(document.getElementById('cmpSel')||{}).value||'prev');
   updateTrend(cur,cmp);
 }
+// Changing the range has to repaint whatever is on screen, not only Summary.
+// The bar used to live inside Summary so that was the only view that could see
+// it; now it is in the shell, and a Health or Purchases page that ignored the
+// change would be showing one window while the control claimed another.
+function applyRangeChange(){
+  clearWindowCaches();
+  renderView(curView);
+}
 function initRangeBar(){
   document.querySelectorAll('#rangeSegs button').forEach(b=>b.onclick=()=>{
     document.querySelectorAll('#rangeSegs button').forEach(x=>x.classList.toggle('on',x===b));
     RANGE={preset:b.dataset.range,from:null,to:null};
-    if(curView==='summary')renderSummary();
+    applyRangeChange();
   });
 }
 function applyCustomRange(){
@@ -2907,7 +2970,15 @@ function applyCustomRange(){
   if(!f){alert('Pick a start date');return;}
   RANGE={preset:'custom',from:f,to:t||null};
   document.querySelectorAll('#rangeSegs button').forEach(x=>x.classList.remove('on'));
-  if(curView==='summary')renderSummary();
+  applyRangeChange();
+}
+// Cached RPC answers are keyed by the window they were fetched for, so they do
+// not go stale on a range change — but the view-level caches that hold a single
+// "current" result do. Cleared here rather than in each renderer, where one
+// forgotten line would leave a page showing the previous range's numbers.
+function clearWindowCaches(){
+  try{ PIVOT_DATA=null; }catch(e){}
+  try{ VIS_OFFSET=0; }catch(e){}
 }
 /* ---- Audience & network: accurate counts across ALL sessions (not just 400) ---- */
 const OSPAL=['#4F46E5','#7C74F0','#A5A0F5','#C7C9F5','#E0E1FB','#ECECFB'];
@@ -3156,6 +3227,43 @@ function renderSummarySoon(){
   clearTimeout(sumTimer);
   sumTimer=setTimeout(()=>{ if(curView==='summary'){ liveCount=0; if(el) el.style.display='none'; renderSummary(); } },45000);
 }
+// Auto-refresh, because the old path almost never fired. Realtime inserts armed
+// a 45-second debounce that only completed after a 45-second gap in traffic —
+// on a store taking a few thousand views a day that gap does not arrive, so the
+// page sat on whatever it loaded with and had to be refreshed by hand. It also
+// only ever repainted Summary, leaving the other nine views frozen.
+//
+// This ticks on a fixed cadence instead, so it does not depend on traffic
+// pausing, and it repaints whichever view is open.
+const AUTO_REFRESH_MS=60000;
+let autoTimer=null, hoverHold=false;
+
+// Paused while the pointer is inside a chart or table. Repainting under the
+// cursor swaps the element being read mid-hover and drops the tooltip.
+document.addEventListener('mouseover',e=>{
+  hoverHold=!!(e.target.closest && e.target.closest('.hmgrid,.tspark,table,.card'));
+});
+document.addEventListener('mouseleave',()=>{ hoverHold=false; }, true);
+
+function autoRefreshTick(){
+  if(document.visibilityState!=='visible') return;   // no work for a hidden tab
+  if(hoverHold) return;                              // try again next tick
+  if(document.querySelector('.modal.on')) return;    // never yank a modal's data
+  liveCount=0;
+  const el=document.getElementById('liveTick'); if(el) el.style.display='none';
+  clearWindowCaches();
+  renderView(curView);
+}
+function startAutoRefresh(){
+  if(autoTimer) clearInterval(autoTimer);
+  autoTimer=setInterval(autoRefreshTick,AUTO_REFRESH_MS);
+}
+// A tab that was hidden for a while is showing stale numbers the moment it is
+// looked at again, so refresh on return rather than waiting out the interval.
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible') autoRefreshTick();
+});
+
 let liveTimer; function renderLiveSoon(){clearTimeout(liveTimer);liveTimer=setTimeout(()=>{if(curView==='live')renderLive();},700);}
 let wvTimer;   function renderWVLiveSoon(){clearTimeout(wvTimer);wvTimer=setTimeout(()=>{if(curView==='webvitals'){renderCWV();renderWVLive();}},900);}
 /* ---- Pivot report: a dimension (device/os/net/ref) broken down by page group ---- */
@@ -3489,29 +3597,75 @@ async function delMonitor(id){
 }
 
 /* ===================== TASKS ================== */
+function taskRowHTML(it, checks){
+  const c=checks.find(x=>x.category===it.category&&x.item===it.item);
+  const st=c?c.status:'pending';
+  const auto=it.check_type==='auto';
+  /* A scripted check can still come back 'manual' — it ran, went as far as it
+     safely could, and is handing the last step to a person. Give those rows the
+     Pass/Attention buttons too, or the task becomes a dead end. */
+  const needsHuman=!auto||st==='manual';
+  const when=c?timeAgo(c.created_at):'not run';
+  const esc=it.item.replace(/'/g,"&#39;");
+  return `<div class="taskrow">
+    <span class="st ${st}"></span>
+    <span class="lbl">${it.item}</span>
+    <span class="autobadge ${auto?'':'man'}">${auto?'AUTO':'MANUAL'}</span>
+    <span class="meta">
+      ${c&&c.value?`<span class="val">${c.value}</span>`:''}
+      <span>${when}</span>
+      ${needsHuman?`<button class="mini" onclick="markManual('${it.category}','${esc}','pass')">✓ Pass</button><button class="mini" onclick="markManual('${it.category}','${esc}','fail')">⚠ Attention</button>`:''}
+    </span></div>`;
+}
+
+// Which categories are open. Kept across re-renders so an auto-refresh or a
+// Pass click does not collapse the section being worked through.
+const qaOpen = new Set();
+
 function renderTask(){
-  const items=DATA.items.filter(i=>i.category===curCat).sort((a,b)=>a.sort-b.sort);
+  const box=document.getElementById('qaAccordion'); if(!box) return;
   const checks=latestChecks();
-  document.getElementById('taskDesc').textContent=`${items.length} checks · ${items.filter(i=>i.check_type==='auto').length} automated`;
-  document.getElementById('taskList').innerHTML=items.map(it=>{
-    const c=checks.find(x=>x.category===it.category&&x.item===it.item);
-    const st=c?c.status:'pending';
-    const auto=it.check_type==='auto';
-    /* A scripted check can still come back 'manual' — it ran, went as far as it
-       safely could, and is handing the last step to a person. Give those rows
-       the Pass/Attention buttons too, or the task becomes a dead end. */
-    const needsHuman=!auto||st==='manual';
-    const when=c?timeAgo(c.created_at):'not run';
-    return `<div class="taskrow">
-      <span class="st ${st}"></span>
-      <span class="lbl">${it.item}</span>
-      <span class="autobadge ${auto?'':'man'}">${auto?'AUTO':'MANUAL'}</span>
-      <span class="meta">
-        ${c&&c.value?`<span class="val">${c.value}</span>`:''}
-        <span>${when}</span>
-        ${needsHuman?`<button class="mini" onclick="markManual('${it.category}','${it.item.replace(/'/g,"&#39;")}','pass')">✓ Pass</button><button class="mini" onclick="markManual('${it.category}','${it.item.replace(/'/g,"&#39;")}','fail')">⚠ Attention</button>`:''}
-      </span></div>`;
-  }).join('')||'<div class="empty">No checks in this category</div>';
+  let totalItems=0, totalAuto=0;
+
+  box.innerHTML = TASK_CATS.map(cat => {
+    const items=DATA.items.filter(i=>i.category===cat).sort((a,b)=>a.sort-b.sort);
+    if(!items.length) return '';
+    totalItems+=items.length; totalAuto+=items.filter(i=>i.check_type==='auto').length;
+
+    // Counted from the same rows the section will show, so the header can never
+    // disagree with what opening it reveals.
+    let pass=0, attn=0, pending=0;
+    items.forEach(it=>{
+      const c=checks.find(x=>x.category===it.category&&x.item===it.item);
+      const st=c?c.status:'pending';
+      if(st==='pass') pass++;
+      else if(st==='fail'||st==='error') attn++;
+      else pending++;
+    });
+    const worst = attn?'poor' : pending?'warn' : 'good';
+    const open = qaOpen.has(cat);
+
+    return `<div class="qasec ${open?'open':''}" data-cat="${cat.replace(/"/g,'&quot;')}">
+      <button class="qahead" onclick="toggleQA('${cat.replace(/'/g,"&#39;")}')">
+        <span class="qacaret">${open?'▾':'▸'}</span>
+        <span class="qaicon">${CAT_ICON[cat]||'•'}</span>
+        <span class="qatitle">${cat.replace(' Testing','')}</span>
+        <span class="qacounts">
+          <span class="qadot ${worst}"></span>
+          <b>${pass}</b>/${items.length} passing${attn?` · <span class="qaattn">${attn} need attention</span>`:''}${pending?` · ${pending} pending`:''}
+        </span>
+      </button>
+      <div class="qabody">${open?items.map(it=>taskRowHTML(it,checks)).join(''):''}</div>
+    </div>`;
+  }).join('');
+
+  const d=document.getElementById('taskDesc');
+  if(d) d.textContent=`${TASK_CATS.length} categories · ${totalItems} checks · ${totalAuto} automated`;
+}
+
+function toggleQA(cat){
+  qaOpen.has(cat) ? qaOpen.delete(cat) : qaOpen.add(cat);
+  renderTask();
 }
 function timeAgo(t){const s=(Date.now()-new Date(t))/1000;if(s<60)return'just now';if(s<3600)return Math.floor(s/60)+'m ago';if(s<86400)return Math.floor(s/3600)+'h ago';return Math.floor(s/86400)+'d ago';}
 async function markManual(cat,item,status){
@@ -3705,7 +3859,7 @@ async function loadRuntimeConfig(){
   }catch{}
 }
 async function boot(){
-  initRail();initControls();buildNav();buildAudienceCards();initRangeBar();initTrendControls();initCwvDevice();initLabStrategy();
+  initRail();initControls();buildNav();buildAudienceCards();initRangeBar();initTrendControls();initCwvDevice();initLabStrategy();startAutoRefresh();
   await loadRuntimeConfig();
   initSB();
   loadAll().then(subscribe);
