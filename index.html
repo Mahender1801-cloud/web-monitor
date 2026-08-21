@@ -76,6 +76,12 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
 .dd-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:40;min-width:184px;background:var(--surface);
   border:1px solid var(--line);border-radius:11px;box-shadow:0 12px 34px rgba(16,20,30,.16);padding:5px;display:none}
 .dd-menu.on{display:block;animation:ddin .14s ease}
+/* A menu anchored right:0 opens leftward from its button. That is right for the
+   comparison picker at the end of the header and wrong for the granularity
+   button at the start of the trend card, where it slid off the card and over
+   the sidebar. dd-left anchors those to their left edge instead. */
+.dd.dd-left .dd-menu{left:0;right:auto}
+
 @keyframes ddin{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 .dd-menu button{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;color:var(--ink);
   text-align:left;padding:8px 10px;border-radius:7px;font-family:inherit;font-size:12.5px;cursor:pointer}
@@ -209,7 +215,18 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
 .chartbox.sm{height:172px}
 .chartbox canvas{position:absolute;inset:0}
 /* date-range + compare controls */
-.rangebar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+/* In the header now. margin-left:auto pushes it to the right of the title,
+   ahead of the live dot, filling the empty band every page had up there. */
+.rangebar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto}
+.top .rangebar .segs{padding:2px}
+.top .rangebar .segs button{padding:5px 10px;font-size:11.5px}
+.top .rangebar .dd-btn{padding:5px 9px;font-size:11.5px}
+.top .rangebar .cmp label{font-size:11px}
+/* Below a laptop the header cannot hold the title, six presets, a calendar and
+   a comparison picker. The comparison and calendar drop first — they are the
+   least-used of the four — and the presets wrap rather than overflow. */
+@media(max-width:1180px){ .top .rangebar .cmp{display:none} }
+@media(max-width:900px){ .top .rangebar #calBtn{display:none} }
 .segs{display:inline-flex;background:var(--line2);border-radius:9px;padding:3px}
 .segs button{border:0;background:transparent;color:var(--muted);font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:7px}
 .segs button.on{background:var(--surface);color:var(--accent);box-shadow:0 1px 2px rgba(16,23,40,.08)}
@@ -513,6 +530,28 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
         <h1 id="vtitle">Summary</h1>
         <div class="sub" id="vsub">Real-user performance across the store</div>
       </div>
+      <!-- The range control sits in the header, not in the page body. Every
+           view honours it, so repeating it per page wasted a band of vertical
+           space on each one and left pages like Purchases with an empty
+           header and a crowded body. -->
+        <div class="rangebar">
+          <div class="segs" id="rangeSegs">
+            <button data-range="today" class="on">Today</button>
+            <button data-range="yesterday">Yesterday</button>
+            <button data-range="7d">7 days</button>
+            <button data-range="30d">30 days</button>
+            <button data-range="90d">90 days</button>
+            <button data-range="all">All</button>
+          </div>
+          <input type="date" id="rangeFrom" style="display:none"><input type="date" id="rangeTo" style="display:none">
+          <button class="dd-btn" id="calBtn" onclick="openCal(event)">
+            <span>📅</span><span id="calLabel">Custom range</span><span class="dd-caret">▾</span>
+          </button>
+          <div class="cmp">
+            <label>Compare vs</label>
+            <div class="dd" id="ddCmp"></div>
+          </div>
+        </div>
       <div class="live">
         <span class="pulse off" id="pulse"></span>
         <span id="livelbl">idle</span>
@@ -526,35 +565,13 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
         <span>●</span><div><b>Sample data.</b> You're seeing generated numbers. Click <b>Connect</b>, paste your Supabase URL + anon key, and everything below goes live.</div>
       </div>
 
-      <!-- The range bar lives in the shell, not inside Summary. Every view
-           already reads windowRange(); the control being trapped in one of
-           them meant the other nine silently used a window nobody could see
-           or change. -->
-        <div class="rangebar">
-        <div class="segs" id="rangeSegs">
-          <button data-range="today" class="on">Today</button>
-          <button data-range="yesterday">Yesterday</button>
-          <button data-range="7d">7 days</button>
-          <button data-range="30d">30 days</button>
-          <button data-range="90d">90 days</button>
-          <button data-range="all">All</button>
-        </div>
-        <input type="date" id="rangeFrom" style="display:none"><input type="date" id="rangeTo" style="display:none">
-        <button class="dd-btn" id="calBtn" onclick="openCal(event)">
-          <span>📅</span><span id="calLabel">Custom range</span><span class="dd-caret">▾</span>
-        </button>
-        <div class="cmp">
-          <label>Compare vs</label>
-          <div class="dd" id="ddCmp"></div>
-        </div>
-      </div>
       <!-- SUMMARY -->
       <section class="view on" data-view="summary">
         <div class="grid g5" id="sumTiles"></div>
         <div class="section-h"><h2>Real-user trend</h2><span id="sumRange">last 7 days</span></div>
         <div class="card">
           <div class="trendbar">
-            <div class="dd gransel-wrap" id="ddGran"></div>
+            <div class="dd dd-left gransel-wrap" id="ddGran"></div>
             <select id="trendGran" style="display:none" onchange="onTrendGran()">
               <option value="auto">granularity: auto</option>
               <option value="minute">by minute</option>
@@ -562,7 +579,7 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
               <option value="day">by day</option>
             </select>
             <div class="segs sm" id="hmMetric">
-              <button data-m="lcp" class="on">LCP</button><button data-m="inp">INP</button><button data-m="cls">CLS</button><button data-m="fcp">FCP</button><button data-m="ttfb">TTFB</button>
+              <button data-m="lcp" class="on">LCP</button><button data-m="inp">INP</button><button data-m="cls">CLS</button><button data-m="fcp">FCP</button><button data-m="ttfb">TTFB</button><button data-m="views">Views</button>
             </div>
             <span class="trendkey" id="hmLegend"></span>
           </div>
@@ -2744,6 +2761,9 @@ const METRIC_META={
   cls: {label:'CLS', color:'#0EA5A5', div:1,    unit:'', fmt:v=>fmtCls(v)},
   fcp: {label:'FCP', color:'#2563EB', div:1000, unit:'s', fmt:v=>fmtMs(v)},
   ttfb:{label:'TTFB',color:'#059669', div:1000, unit:'s', fmt:v=>fmtMs(v)},
+  // Traffic, not a vital. It has no good/poor threshold — more views is not
+  // better or worse — so it is coloured on a relative ramp, see heatColor().
+  views:{label:'Views',color:'#334155', div:1, unit:'', fmt:v=>v==null?'—':Math.round(v).toLocaleString(), volume:true},
 };
 function autoBucket(from,to){ const h=(to-from)/3600000; if(h<=12)return 'minute'; if(h<=96)return 'hour'; return 'day'; }
 // PERF: same two-layer cache as fetchStats. Switching metric tabs (LCP->INP->CLS)
@@ -2796,7 +2816,11 @@ async function updateTrend(cur,cmp){
       ]);
       return [m,{cs,ps}];
     })),
-    fetchTrend(cur.from,cur.to,heatBucket,hmMetric)
+    // dash_trend takes a vital name and returns [ts, p75, views]. Views is that
+    // third column, not a metric the RPC knows, so a volume selection still asks
+    // for lcp and reads the count instead — asking for 'views' returns nothing.
+    fetchTrend(cur.from,cur.to,heatBucket,
+               (METRIC_META[hmMetric]&&METRIC_META[hmMetric].volume)?'lcp':hmMetric)
   ]);
   if(my!==trendToken) return;                 // a newer request superseded this one
   drawTileSparks(Object.fromEntries(series));
@@ -2887,8 +2911,14 @@ function drawTileSparks(series){
 // Value -> colour on the metric's own thresholds, so green and red mean the same
 // thing here as on the tiles. A per-window min/max scale would repaint a good
 // week in alarming red simply because one hour was worse than the others.
-function heatColor(metric,v){
+function heatColor(metric,v,lo,hi){
   if(v==null) return null;
+  // Volume has no threshold to judge against, so it uses the window's own range.
+  // Applying a good/poor scale to traffic would paint a busy hour "poor".
+  if(METRIC_META[metric] && METRIC_META[metric].volume){
+    const t=(hi>lo)?(v-lo)/(hi-lo):0.5;
+    return mixHex('#E8EDF4','#334155',0.12+t*0.88);
+  }
   const [g,p]=TH[metric];
   if(v<=g){ const t=Math.max(0,Math.min(1,v/g)); return mixHex('#DCFCE7','#16A34A',0.25+t*0.75); }
   if(v<=p){ const t=(v-g)/((p-g)||1);            return mixHex('#FEF3C7','#D97706',0.25+t*0.75); }
@@ -2939,13 +2969,22 @@ function drawHeatmap(cur,bucket,cs){
 
   // Several buckets can land in one cell (minute buckets inside an hour). Average
   // them rather than letting the last one win, which would hide a bad spike.
+  // dash_trend returns [timestamp, p75, views]. For the vitals the cell value is
+  // the p75; for Views it is the third column, and it sums rather than averages —
+  // two half-hours in one cell are that many views, not their mean.
+  const isVol = !!(METRIC_META[hmMetric] && METRIC_META[hmMetric].volume);
   const cell={};
   cs.forEach(a=>{
-    if(a[1]==null) return;
+    const raw = isVol ? a[2] : a[1];
+    if(raw==null) return;
     const [r,c]=keyOf(a); if(r<0||c<0) return;
     const k=r+':'+c; (cell[k]=cell[k]||{sum:0,n:0,views:0});
-    cell[k].sum+=+a[1]; cell[k].n++; cell[k].views+=(+a[2]||0);
+    cell[k].sum+=+raw; cell[k].n+=(isVol?0:1); cell[k].views+=(+a[2]||0);
   });
+  // Relative colouring needs the range across every cell, so it is computed once
+  // here rather than per cell.
+  const vals=Object.values(cell).map(d=>isVol?d.sum:d.sum/d.n).filter(v=>v!=null&&isFinite(v));
+  const vLo=vals.length?Math.min.apply(null,vals):0, vHi=vals.length?Math.max.apply(null,vals):1;
 
   const html=[];
   html.push('<div class="hmgrid" style="grid-template-columns:52px repeat('+cols.length+',1fr)">');
@@ -2956,29 +2995,37 @@ function drawHeatmap(cur,bucket,cs){
     cols.forEach((c,ci)=>{
       const d=cell[ri+':'+ci];
       if(!d){ html.push('<div class="hmcell na"></div>'); return; }
-      const v=d.sum/d.n;
-      html.push('<div class="hmcell" style="background:'+heatColor(hmMetric,v)+'"'+
+      const v=isVol?d.sum:d.sum/d.n;
+      html.push('<div class="hmcell" style="background:'+heatColor(hmMetric,v,vLo,vHi)+'"'+
         ' data-v="'+v+'" data-views="'+d.views+'" data-lab="'+cellLabel(r,c)+'"></div>');
     });
   });
   html.push('</div>');
   box.innerHTML=html.join('');
 
-  const [g,p]=TH[hmMetric];
   const leg=document.getElementById('hmLegend');
+  if(isVol){
+    if(leg) leg.innerHTML='<span class="hmscale">'+
+      '<span class="hmswatch" style="background:'+heatColor(hmMetric,vLo,vLo,vHi)+'"></span>'+Math.round(vLo).toLocaleString()+
+      '<span class="hmswatch" style="background:'+heatColor(hmMetric,(vLo+vHi)/2,vLo,vHi)+';margin-left:8px"></span>'+
+      '<span class="hmswatch" style="background:'+heatColor(hmMetric,vHi,vLo,vHi)+';margin-left:8px"></span>'+Math.round(vHi).toLocaleString()+' views'+
+      '</span>';
+  } else {
+  const [g,p]=TH[hmMetric];
   if(leg) leg.innerHTML='<span class="hmscale">'+
     '<span class="hmswatch" style="background:'+heatColor(hmMetric,g*0.5)+'"></span>good ≤'+M.fmt(g)+
     '<span class="hmswatch" style="background:'+heatColor(hmMetric,(g+p)/2)+';margin-left:8px"></span>needs work'+
     '<span class="hmswatch" style="background:'+heatColor(hmMetric,p*1.5)+';margin-left:8px"></span>poor >'+M.fmt(p)+
     '</span>';
+  }
 
   let tip=document.getElementById('hmTip2');
   if(!tip){ tip=document.createElement('div'); tip.id='hmTip2'; tip.className='hmtip'; document.body.appendChild(tip); }
   box.querySelectorAll('.hmcell[data-v]').forEach(el=>{
     el.addEventListener('mousemove',e=>{
       const v=+el.dataset.v, n=+el.dataset.views;
-      tip.innerHTML='<b>'+M.fmt(v)+'</b> '+M.label+' p75<br>'+el.dataset.lab+
-                    (n?'<br>'+n.toLocaleString()+' views':'');
+      tip.innerHTML='<b>'+M.fmt(v)+'</b> '+M.label+(M.volume?'':' p75')+'<br>'+el.dataset.lab+
+                    ((n&&!M.volume)?'<br>'+n.toLocaleString()+' views':'');
       tip.classList.add('on');
       tip.style.left=Math.min(window.innerWidth-190,e.clientX+14)+'px';
       tip.style.top=(e.clientY-46)+'px';

@@ -66,6 +66,34 @@ end $$;
 grant execute on function public.alerts_autoresolve() to anon;
 
 -- ---------------------------------------------------------------------------
+-- Expire alerts nobody can close.
+--
+-- Two "JavaScript errors have doubled" alerts from 7 and 8 August were still
+-- open twelve days later. Unlike an order drought there is no later event that
+-- proves an error spike ended, so nothing was ever going to clear them — and a
+-- twelve-day-old spike says nothing about today in either direction.
+--
+-- They are marked expired rather than resolved, because that is what happened:
+-- the alert aged out, it was not observed to recover. The history keeps them,
+-- so a pattern of recurring spikes stays visible.
+-- ---------------------------------------------------------------------------
+create or replace function public.alerts_expire(p_days int default 3)
+returns integer language plpgsql
+set statement_timeout = '20s'
+as $$
+declare n integer;
+begin
+  update public.alerts
+     set resolved_at = created_at + make_interval(days => p_days),
+         resolved_by = 'expired'
+   where resolved_at is null
+     and created_at < now() - make_interval(days => p_days);
+  get diagnostics n = row_count;
+  return n;
+end $$;
+grant execute on function public.alerts_expire(int) to anon;
+
+-- ---------------------------------------------------------------------------
 -- open_alerts now means open. It meant "not acknowledged", which is why a
 -- two-day-old alert whose condition had cleared still counted as one.
 --
