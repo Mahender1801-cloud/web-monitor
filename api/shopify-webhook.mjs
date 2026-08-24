@@ -83,6 +83,24 @@ function toRow(o) {
   // order to the shopper's full browsing journey without relying on a pixel.
   const attrs = {};
   (o.note_attributes || o.noteAttributes || []).forEach(a => { if (a && a.name) attrs[a.name] = a.value; });
+
+  // Agentic checkout: an AI shopping agent stamps _agentClientInfo on the cart.
+  // clientId groups a repeat agent; platformUserId is the buyer behind it. Both
+  // are pulled out for grouping; the whole blob is kept in raw so a later change
+  // of mind about what matters does not need a re-pull that PCD would block.
+  let agent = null;
+  const rawAgent = attrs._agentClientInfo || attrs.agentClientInfo;
+  if (rawAgent) {
+    try {
+      const a = typeof rawAgent === 'string' ? JSON.parse(rawAgent) : rawAgent;
+      const ci = a.clientInformation || {};
+      agent = { client: a.clientId || null, platform: ci.platformUserId || null, info: a };
+    } catch {
+      // Present but unparseable still means an agent was involved — record that
+      // rather than dropping the signal because the JSON was malformed.
+      agent = { client: null, platform: null, info: String(rawAgent).slice(0, 500) };
+    }
+  }
   return {
     id,
     order_number: o.name ?? o.order_number ?? null,
@@ -97,6 +115,10 @@ function toRow(o) {
     source_name: o.source_name ?? o.sourceName ?? null,
     rum_session: attrs._rum_sid || o.rum_session || null,
     ga_client_id: attrs._rum_gid || o.ga_client_id || null,
-    raw: { via: o.__src || 'webhook', receivedAt: new Date().toISOString() }
+    is_agent: !!agent,
+    agent_client: agent?.client || null,
+    agent_platform: agent?.platform || null,
+    raw: { via: o.__src || 'webhook', receivedAt: new Date().toISOString(),
+           ...(agent ? { agent: agent.info } : {}) }
   };
 }

@@ -64,6 +64,8 @@ const EXPECTED = [
   ['Product Page Testing', 'Check breadcrumb navigation'],
   ['Product Page Testing', 'Verify stock/inventory status'],
   ['Product Page Testing', 'Check sale price / compare-at price display'],
+  ['Product Page Testing', 'Check A+ content / media sections'],
+  ['Product Page Testing', 'Test size guide / lens options / custom sections'],
   ['Product Page Testing', 'Verify related / upsell / cross-sell'],
   ['Product Page Testing', 'Test sticky Add to Cart on scroll (mobile)'],
   ['Cart & Checkout Testing', 'Add product to cart'],
@@ -568,6 +570,61 @@ async function main() {
         `${struck ? `${struck} struck-through/sale element(s)` : 'no struck-through price'}, ` +
         `${both ? 'both prices appear on the page' : 'both prices were not found on the page'}`, u);
       await nav(page, prodUrl);
+    });
+
+    // Rich media below the fold — the "A+ content" a marketplace listing would
+    // call it. Judged on what is actually there rather than on a single marker,
+    // because themes build it half a dozen different ways: embedded video, image
+    // blocks inside the description, or simply a long written description.
+    await step('Product Page Testing', 'Check A+ content / media sections', async () => {
+      const cat = 'Product Page Testing', item = 'Check A+ content / media sections';
+      for (let i = 0; i < 8; i++) { await page.mouse.wheel(0, 1400).catch(() => {}); await pause(300, 550); }
+      await pause(1500, 2500);
+      const m = await page.evaluate(() => {
+        const desc = document.querySelector('[class*="description" i], [class*="product__info" i], .rte');
+        const words = desc ? (desc.innerText || '').trim().split(/\s+/).filter(Boolean).length : 0;
+        return {
+          videos: document.querySelectorAll('video, iframe[src*="youtube"], iframe[src*="vimeo"]').length,
+          descImgs: desc ? desc.querySelectorAll('img').length : 0,
+          blocks: document.querySelectorAll('[class*="rich-text" i], [class*="a-plus" i], [class*="image-with-text" i]').length,
+          words
+        };
+      });
+      const rich = m.videos + m.descImgs + m.blocks;
+      // A description alone is not A+ content, so words only lift a 'warn' to a
+      // 'pass' when there is media with it.
+      record(cat, item, rich ? 'pass' : (m.words > 120 ? 'warn' : 'fail'),
+        `${m.videos} video(s) · ${m.descImgs} image(s) in the description · ${m.blocks} rich block(s) · ${m.words} words` +
+        (rich ? '' : m.words > 120 ? ' — text only, no media' : ' — little beyond the buy box'), prodUrl);
+    });
+
+    // Size guide and lens/custom options. Both are the same shape of thing: a
+    // control that must open something. Presence alone is not enough — a link
+    // that opens nothing is the failure worth catching.
+    await step('Product Page Testing', 'Test size guide / lens options / custom sections', async () => {
+      const cat = 'Product Page Testing', item = 'Test size guide / lens options / custom sections';
+      const guide = await firstVisible(page.locator(
+        '[class*="size-guide" i], [class*="sizeguide" i], [class*="size_chart" i], ' +
+        'a:has-text("Size guide"), button:has-text("Size guide"), a:has-text("Size chart"), button:has-text("Size chart")'));
+      const lens = await page.locator(
+        '[class*="lens" i] select, [class*="lens" i] input, [name*="lens" i], ' +
+        '[class*="custom" i] select, [class*="addon" i], [class*="upsell-option" i]').count();
+
+      let opened = false;
+      if (guide) {
+        await guide.click({ force: true }).catch(() => {});
+        await pause(1800, 2800);
+        opened = (await page.locator('[role="dialog"]:visible, [class*="modal" i]:visible, [class*="drawer" i]:visible, [class*="popup" i]:visible').count()) > 0;
+        await page.keyboard.press('Escape').catch(() => {});
+      }
+      record(cat, item,
+        (guide && opened) ? 'pass' : (guide || lens) ? 'warn' : 'fail',
+        guide
+          ? (opened ? `size guide opens${lens ? ` · ${lens} lens/custom option control(s)` : ''}`
+                    : 'size-guide control found but clicking it opened nothing')
+          : lens ? `${lens} lens/custom option control(s), but no size guide`
+                 : 'no size guide and no lens or custom option controls on the product page',
+        prodUrl);
     });
 
     await step('Product Page Testing', 'Verify related / upsell / cross-sell', async () => {

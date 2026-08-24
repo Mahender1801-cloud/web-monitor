@@ -673,6 +673,9 @@ select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--acc
       <!-- PURCHASES -->
       <section class="view" data-view="purchases">
         <div class="grid g4" id="buyTiles"></div>
+        <!-- Orders placed through an AI shopping agent. Hidden entirely until the
+             first one arrives, so it is never an empty box implying breakage. -->
+        <div id="agentBox"></div>
         <div class="section-h"><h2>Conversion funnel</h2><span>how many visitors reach each step · same window</span></div>
         <div id="funnelBox" style="margin-bottom:8px"></div>
         <div class="section-h"><h2>Recent orders</h2><span id="buyNote">every order · click "journey" to see the pages they saw before buying</span></div>
@@ -1288,6 +1291,37 @@ const LINK_WHY={stamp:'Exact: the cart carried this shopper’s session id',
   checkout:'Strong: this session clicked checkout just before the order',
   cart:'Good: this session opened the cart just before the order',
   atc:'Weaker: this session added to cart shortly before the order'};
+function paintAgent(a){
+  const el=document.getElementById('agentBox'); if(!el) return;
+  // Nothing to show is the common case, and an empty card would read as broken.
+  // The RPC missing (agent_orders.sql not run) is also silent — this is an
+  // additive panel, not something the page should nag about.
+  if(!a || !a.orders_agent){ el.innerHTML=''; return; }
+  const share = a.agent_share_pct||0;
+  const cmp = (a.agent_aov!=null && a.human_aov!=null)
+    ? (a.agent_aov>=a.human_aov
+        ? `${money(a.agent_aov)} AOV — ${Math.round((a.agent_aov/a.human_aov-1)*100)}% above human orders`
+        : `${money(a.agent_aov)} AOV — ${Math.round((1-a.agent_aov/a.human_aov)*100)}% below human orders`)
+    : (a.agent_aov!=null ? money(a.agent_aov)+' AOV' : '');
+  el.innerHTML=
+    '<div class="section-h" style="margin-top:4px"><h2>🤖 Agent-assisted orders</h2>'
+    + '<span>placed through an AI shopping agent · same window</span></div>'
+    + '<div class="repcard" style="border-left:4px solid var(--accent)">'
+    +   '<div style="display:flex;gap:26px;flex-wrap:wrap;align-items:baseline">'
+    +     '<div><div class="metric" style="font-size:22px">'+a.orders_agent.toLocaleString()+'</div>'
+    +       '<div class="metric-sub">of '+a.orders_total.toLocaleString()+' orders · '+share+'%</div></div>'
+    +     '<div><div class="metric" style="font-size:22px">'+money(+a.revenue_agent)+'</div>'
+    +       '<div class="metric-sub">agent revenue</div></div>'
+    +     (cmp?'<div style="align-self:center;font-size:12.5px;color:var(--muted)">'+cmp+'</div>':'')
+    +     (a.distinct_agents?'<div style="align-self:center;font-size:12px;color:var(--faint)">'+a.distinct_agents+' distinct agent'+(a.distinct_agents===1?'':'s')+'</div>':'')
+    +   '</div>'
+    +   ((a.recent&&a.recent.length)
+        ? '<div style="margin-top:10px;font-size:12px;color:var(--faint)">recent: '
+          + a.recent.slice(0,6).map(r=>esc(String(r[0]||''))+' '+money(+r[1])).join(' · ') + '</div>'
+        : '')
+    + '</div>';
+}
+
 function renderPurchases(){
   const cur=windowRange();
   const buys=(DATA.purchases||[]).filter(p=>{const t=+new Date(p.created_at);return t>=cur.from&&t<=cur.to;});
@@ -1336,6 +1370,7 @@ function renderPurchases(){
   };
   paintTiles(null);
   fetchShopStats(cur.from,cur.to).then(s=>{ if(s) paintTiles(s); });
+  fetchAgent(cur.from,cur.to).then(a=>paintAgent(a));
 
   // conversion funnel — sessions reaching each step (server-side funnel_stats)
   paintFunnel(null);
@@ -2677,6 +2712,7 @@ const fetchPages     =(f,t)=>cachedRpc('dash_pages',     {p_from:iso(f),p_to:iso
 const fetchPageDaily =(f,t)=>cachedRpc('dash_page_daily',{p_from:iso(f),p_to:iso(t),p_limit:25}, 'pgd_'+f+'_'+t);
 const fetchShopStats =(f,t)=>cachedRpc('shop_stats',     {p_from:iso(f),p_to:iso(t)},            'shop_'+f+'_'+t);
 const fetchFunnel    =(f,t)=>cachedRpc('funnel_stats',   {p_from:iso(f),p_to:iso(t)},            'fun_'+f+'_'+t);
+const fetchAgent     =(f,t)=>cachedRpc('agent_order_stats',{p_from:iso(f),p_to:iso(t)},          'agt_'+f+'_'+t);
 const fetchVisitors  =(f,t,off)=>cachedRpc('recent_visitors',{p_from:iso(f),p_to:iso(t),p_limit:VIS_PAGE,p_offset:off||0},'vis_'+f+'_'+t+'_'+(off||0));
 const fetchSources   =(f,t)=>cachedRpc('traffic_sources', {p_from:iso(f),p_to:iso(t)},            'src_'+f+'_'+t);
 const fetchVisReport =(f,t)=>cachedRpc('visitor_report',  {p_from:iso(f),p_to:iso(t)},            'vrp_'+f+'_'+t);
