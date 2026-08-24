@@ -9,3 +9,6 @@ test-results/
 playwright-report/
 docker/.env
 docker/backups/
+
+# scratch test scripts (either session)
+_*.mjs
