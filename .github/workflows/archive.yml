@@ -1,0 +1,41 @@
+name: Archive & prune
+
+# The laptop-free retention job. It keeps Supabase under the free tier without a
+# machine that has to be on: GitHub is always up, and a Release is free,
+# permanent storage. Each run cold-archives the raw rows that have aged out of
+# the keep window to a gzipped NDJSON on the release, confirms the upload, and
+# only then deletes them from Supabase. Aggregates (rum_daily) are never touched,
+# so every dashboard report keeps working forever.
+#
+# Once a day is enough — the keep windows are 14 and 7 days, so nothing is
+# urgent, and a daily run trims exactly the one day that just aged out.
+on:
+  schedule:
+    - cron: '41 3 * * *'      # 03:41 UTC, an odd minute, well clear of the other jobs
+  workflow_dispatch:
+    inputs:
+      no_prune:
+        description: 'Archive only, do not delete from Supabase'
+        type: boolean
+        default: false
+
+# Needs to create releases and upload assets.
+permissions:
+  contents: write
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Archive aged-out raw to the release, then prune
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          GH_TOKEN:             ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG:          archive
+        run: node scripts/archive_daily.mjs ${{ inputs.no_prune && '--no-prune' || '' }}
